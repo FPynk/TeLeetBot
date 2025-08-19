@@ -110,7 +110,7 @@ def get_user_chats(telegram_user_id:int):
           WHERE m.telegram_user_id=?
         """,(telegram_user_id,)).fetchall()
 
-def get_or_set_last_seen(lc_username:str, ts:int|None=None):
+def get_or_set_last_seen(lc_username:str, ts:int):
     with conn() as c:
         row = c.execute("SELECT last_seen_ts FROM last_seen WHERE lc_username=?", (lc_username,)).fetchone()
         if ts is None:
@@ -136,10 +136,12 @@ def insert_completion(telegram_user_id:int, slug:str, solved_at_utc:int) -> bool
 def weekly_counts(chat_id:int, start:int, end:int):
     with conn() as c:
         return c.execute("""
-          SELECT u.telegram_user_id, p.difficulty, COUNT(*) as c
-          FROM completions co
-          JOIN problems p ON p.slug = co.slug
-          JOIN memberships m ON m.telegram_user_id = co.telegram_user_id
-          WHERE m.chat_id=? AND co.solved_at_utc >= ? AND co.solved_at_utc < ?
-          GROUP BY 1,2
-        """,(chat_id,start,end)).fetchall()
+            SELECT co.telegram_user_id, p.difficulty, COUNT(*) AS c
+            FROM completions AS co
+            JOIN problems   AS p ON p.slug = co.slug
+            JOIN memberships AS m ON m.telegram_user_id = co.telegram_user_id
+            WHERE m.chat_id = ?
+              AND co.solved_at_utc >= ?
+              AND co.solved_at_utc < ?
+            GROUP BY co.telegram_user_id, p.difficulty
+        """, (chat_id, start, end)).fetchall()

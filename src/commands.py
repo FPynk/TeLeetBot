@@ -1,5 +1,6 @@
 from aiogram import Router, types, F
 from aiogram.filters import Command
+import time, sqlite3
 from . import db
 
 router = Router()
@@ -13,15 +14,40 @@ async def link(m: types.Message):
     parts = (m.text or "").split()
     if len(parts) != 2:
         return await m.reply("Usage: /link <leetcode_username>")
-    lc = parts[1]
+
+    lc = parts[1].strip()
     tg_id = m.from_user.id
-    db.upsert_user(tg_id, m.from_user.username or "", lc)
-    await m.reply(f"Linked to LeetCode: {lc}. I’ll track first-time ACs and post to groups you join.")
+    tg_un = m.from_user.username or ""
+
+    try:
+        # Create or update your row
+        db.upsert_user(tg_id, tg_un, lc)
+
+        # Optional: start tracking from NOW to avoid immediate backfill announcements
+        db.get_or_set_last_seen(lc, int(time.time()))
+
+        await m.reply(f"Linked to LeetCode: {lc}. I’ll track first-time ACs and post to groups you join.")
+    except sqlite3.IntegrityError as e:
+        # This happens if someone else has already linked this lc_username
+        if "users.lc_username" in str(e):
+            return await m.reply("That LeetCode username is already linked by another Telegram user. "
+                                 "Ask them to /unlink first or use a different LeetCode account.")
+        raise
 
 @router.message(Command("unlink"))
 async def unlink(m: types.Message):
-    # simplest: set lc_username to NULL not allowed; you can delete row
-    await m.reply("Not implemented yet (MVP keeps it simple).")
+    tg_id = m.from_user.id
+    with db.conn() as c:
+        # get current lc_username (to clean last_seen)
+        row = c.execute("SELECT lc_username FROM users WHERE telegram_user_id=?", (tg_id,)).fetchone()
+        if not row:
+            return await m.reply("You don’t have a linked LeetCode account.")
+        lc = row[0]
+        # remove memberships, user, and last_seen
+        c.execute("DELETE FROM memberships WHERE telegram_user_id=?", (tg_id,))
+        c.execute("DELETE FROM users WHERE telegram_user_id=?", (tg_id,))
+        c.execute("DELETE FROM last_seen WHERE lc_username=?", (lc,))
+    await m.reply("Unlinked. You can /link another LeetCode username anytime.")
 
 @router.message(Command("join"))
 async def join(m: types.Message):
