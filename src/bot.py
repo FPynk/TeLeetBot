@@ -21,8 +21,10 @@ async def poll_loop():
         for tg_id, lc_user in users:
             try:
                 cutoff = db.get_or_set_last_seen(lc_user) or 0
+                print(f"[poll] {lc_user} cutoff={cutoff}")
                 subs = await lc.recent_ac(lc_user, limit=12)
                 new = [s for s in subs if int(s["timestamp"]) > cutoff]
+                print(f"[poll] {lc_user} got {len(subs)} subs, {len(new)} new")
                 new.sort(key=lambda s: s["timestamp"])
                 for s in new:
                     slug = s["titleSlug"]; ts = int(s["timestamp"])
@@ -144,3 +146,56 @@ async def main():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
+
+@dp.message(Command("debug_me"))
+async def debug_me(m: types.Message):
+    tg_id = m.from_user.id
+    with db.conn() as c:
+        row = c.execute("SELECT tg_username, lc_username FROM users WHERE telegram_user_id=?", (tg_id,)).fetchone()
+    if not row:
+        return await m.reply("No mapping found. Link first with /link <leetcode_username>.")
+    tg_un, lc = row
+    # last_seen
+    with db.conn() as c:
+        seen = c.execute("SELECT last_seen_ts FROM last_seen WHERE lc_username=?", (lc,)).fetchone()
+    ls = seen[0] if seen else 0
+    ls_h = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(ls)) if ls else "0"
+    await m.reply(f"TG ID: {tg_id}\nTG @: {tg_un or '(none)'}\nLC: {lc}\nlast_seen: {ls} ({ls_h})")
+
+@dp.message(Command("debug_recent"))
+async def debug_recent(m: types.Message):
+    # Usage: /debug_recent [leetcode_username]
+    parts = (m.text or "").split()
+    lcname = parts[1] if len(parts) > 1 else None
+    if not lcname:
+        # default to the caller's linked LC
+        with db.conn() as c:
+            r = c.execute("SELECT lc_username FROM users WHERE telegram_user_id=?", (m.from_user.id,)).fetchone()
+            if not r:
+                return await m.reply("Link first with /link <leetcode_username> or pass a username: /debug_recent foo")
+            lcname = r[0]
+
+    # find the TG user mapped to this LC (for duplicate checks)
+    with db.conn() as c:
+        r = c.execute("SELECT telegram_user_id FROM users WHERE lc_username=?", (lcname,)).fetchone()
+    if not r:
+        return await m.reply(f"No Telegram user linked to LC '{lcname}'.")
+    tg_id = r[0]
+
+    cutoff = db.get_or_set_last_seen(lcname) or 0
+    subs = await lc.recent_ac(lcname, limit=20)
+    subs.sort(key=lambda s: int(s["timestamp"]))
+    lines = [f"cutoff last_seen={cutoff}"]
+    shown = 0
+    for s in reversed(subs):  # newest first
+        t = int(s["timestamp"]); slug = s["titleSlug"]; title = s["title"]
+        # check if first-time completion already recorded
+        with db.conn() as c:
+            seen = c.execute("SELECT 1 FROM completions WHERE telegram_user_id=? AND slug=?", (tg_id, slug)).fetchone()
+        status = []
+        status.append("new" if t > cutoff else "old")
+        status.append("dup" if seen else "first?")
+        lines.append(f"{t}  {title}  [{slug}]  -> {'/'.join(status)}")
+        shown += 1
+        if shown >= 12: break
+    await m.reply("Recent ACs (newest first):\n" + "\n".join(lines[:30]))

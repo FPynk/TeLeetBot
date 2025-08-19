@@ -1,5 +1,6 @@
 import sqlite3, time
 from contextlib import contextmanager
+from typing import Optional
 
 @contextmanager
 def conn(db_path="bot.db"):
@@ -110,15 +111,30 @@ def get_user_chats(telegram_user_id:int):
           WHERE m.telegram_user_id=?
         """,(telegram_user_id,)).fetchall()
 
-def get_or_set_last_seen(lc_username:str, ts:int):
+def get_or_set_last_seen(lc_username: str, ts: Optional[int] = None):
     with conn() as c:
-        row = c.execute("SELECT last_seen_ts FROM last_seen WHERE lc_username=?", (lc_username,)).fetchone()
         if ts is None:
+            row = c.execute(
+                "SELECT last_seen_ts FROM last_seen WHERE lc_username=?",
+                (lc_username,),
+            ).fetchone()
             return row[0] if row else 0
-        if row:
-            c.execute("UPDATE last_seen SET last_seen_ts=? WHERE lc_username=?", (ts, lc_username))
         else:
-            c.execute("INSERT INTO last_seen(lc_username,last_seen_ts) VALUES(?,?)", (lc_username, ts))
+            row = c.execute(
+                "SELECT 1 FROM last_seen WHERE lc_username=?",
+                (lc_username,),
+            ).fetchone()
+            if row:
+                c.execute(
+                    "UPDATE last_seen SET last_seen_ts=? WHERE lc_username=?",
+                    (ts, lc_username),
+                )
+            else:
+                c.execute(
+                    "INSERT INTO last_seen(lc_username,last_seen_ts) VALUES(?,?)",
+                    (lc_username, ts),
+                )
+            return ts
 
 def upsert_problem(slug:str, title:str, difficulty:str):
     with conn() as c:
