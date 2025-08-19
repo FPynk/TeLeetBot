@@ -21,10 +21,9 @@ async def poll_loop():
         for tg_id, lc_user in users:
             try:
                 cutoff = db.get_or_set_last_seen(lc_user) or 0
-                print(f"[poll] {lc_user} cutoff={cutoff}")
                 subs = await lc.recent_ac(lc_user, limit=12)
                 new = [s for s in subs if int(s["timestamp"]) > cutoff]
-                print(f"[poll] {lc_user} got {len(subs)} subs, {len(new)} new")
+                print(f"[poll] {lc_user}, cutoff={cutoff}, {len(new)} new")
                 new.sort(key=lambda s: s["timestamp"])
                 for s in new:
                     slug = s["titleSlug"]; ts = int(s["timestamp"])
