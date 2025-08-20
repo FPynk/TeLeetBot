@@ -47,4 +47,18 @@ Telegram bot to track leetcode progress for groups of people
 - What: Toggles instant “🎉 solved …” announcements for this chat (leaderboard still works when off).
 - Usage: /postonsolve off
 
+```
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+echo 'BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN' > .env
+python -m src.main   # quick smoke test; Ctrl+C to stop
+```
+
+For powershell
 `.\.venv\Scripts\Activate.ps1`
+
+Todo:
+- Add CI CD
+- Host on GCP
