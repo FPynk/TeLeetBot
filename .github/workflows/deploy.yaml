@@ -51,12 +51,8 @@ jobs:
             pip install --upgrade pip
             pip install -r requirements.txt
 
-            # idempotent DB init/migrations
-            python - <<'PY'
-            from src import db
-            db.init()
-            print("db.init() ok")
-            PY
+            # Idempotent DB init (no heredoc)
+            python -c "from src import db; db.init(); print('db.init() ok')"
 
             # quick backup (optional)
             sqlite3 bot.db ".backup 'backups/bot-$(date -u +%Y%m%d-%H%M%S).db'" || true
