@@ -35,29 +35,31 @@ jobs:
           key: ${{ secrets.GCP_VM_SSH_KEY }}
           script_stop: true
           script: |
-            set -euo pipefail
-            cd /home/botuser/TeLeetBot
+            set -e
 
-            # Ensure the VM's repo remote points to your GitHub repo (SSH or HTTPS both fine)
-            git remote -v || true
+            APP_DIR="/home/botuser/TeLeetBot"
+            BACKUP_DIR="$APP_DIR/backups"
+            DB_FILE="$APP_DIR/bot.db"
+
+            cd "$APP_DIR"
 
             git fetch --all
             git checkout main
             git pull --ff-only
 
-            # venv & deps
             python3 -m venv .venv
-            source .venv/bin/activate
+            . .venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
 
-            # Idempotent DB init (no heredoc)
+            # Idempotent DB init
             python -c "from src import db; db.init(); print('db.init() ok')"
 
-            # quick backup (optional)
-            sqlite3 bot.db ".backup 'backups/bot-$(date -u +%Y%m%d-%H%M%S).db'" || true
+            # Ensure backup dir exists, then backup with a small timeout (handles locks)
+            mkdir -p "$BACKUP_DIR"
+            sqlite3 -cmd ".timeout 5000" "$DB_FILE" ".backup '$BACKUP_DIR/bot-$(date -u +%Y%m%d-%H%M%S).db'"
 
-            # restart and show status
+            # Restart service and show status/logs
             sudo systemctl restart leetcode-bot
             sleep 2
             sudo systemctl --no-pager --full status leetcode-bot || true
