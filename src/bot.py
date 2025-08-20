@@ -105,7 +105,7 @@ async def leaderboard(m: types.Message):
             name = f"@{member.user.username}" if member.user.username else (member.user.full_name or str(uid))
         except Exception:
             name = str(uid)
-        lines.append(f"{rank}. {name} — <b>{total}</b> Count-(E:{cts['Easy']} M:{cts['Medium']} H:{cts['Hard']})")
+        lines.append(f"{rank}. {name} — <b>{total}</b> (E:{cts['Easy']} M:{cts['Medium']} H:{cts['Hard']})")
         rank += 1
     await m.reply("\n".join(lines), parse_mode="HTML")
 
