@@ -61,5 +61,4 @@ For powershell
 `.\.venv\Scripts\Activate.ps1`
 
 Todo:
-- Add CI CD
-- Host on GCP
+- Improve functionality
