@@ -8,6 +8,11 @@ Telegram bot to track leetcode progress for groups of people
 - Who: Anyone
 - What: Intro + basic instructions.
 
+`/help`
+- Where: DM or Group
+- Who: Anyone
+- What: Basic instructions to run
+
 `/link <leetcode_username>`
 - Where: DM or Group
 - Who: Anyone
