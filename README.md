@@ -52,6 +52,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+touch .env
 echo 'BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN' > .env
 python -m src.main   # quick smoke test; Ctrl+C to stop
 ```
