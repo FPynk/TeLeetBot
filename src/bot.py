@@ -14,37 +14,49 @@ dp = Dispatcher()
 dp.include_router(cmd_router)
 lc = LCClient()
 
+# point allocation for easy medium hard is hardcoded here, update if you want to implement DB dependent scoring
+
 async def poll_loop():
+    # let bot boot up
     await asyncio.sleep(3)
+    # main logic loop
     while True:
         users = db.get_tracked_users()  # [(tg_id, lc_username)]
         for tg_id, lc_user in users:
             try:
+                # get last processed AC timestamp
                 cutoff = db.get_or_set_last_seen(lc_user) or 0
+
+                # filter out for most recent ACs
                 subs = await lc.recent_ac(lc_user, limit=12)
                 new = [s for s in subs if int(s["timestamp"]) > cutoff]
-                print(f"[poll] {lc_user}, cutoff={cutoff}, {len(new)} new")
-                new.sort(key=lambda s: s["timestamp"])
+                print(f"[poll] {lc_user}, cutoff={cutoff}, {len(new)} new")   # logging
+                new.sort(key=lambda s: s["timestamp"])  # sort olderst to newest
                 for s in new:
                     slug = s["titleSlug"]; ts = int(s["timestamp"])
                     # fetch problem meta/cached
                     from sqlite3 import Row
                     # naive cache check
                     inserted = False
+
                     # cache meta if needed
                     with db.conn() as c:
                         r = c.execute("SELECT slug FROM problems WHERE slug=?", (slug,)).fetchone()
                     if not r:
+                        # incase problem meta data not stored
                         meta = await lc.problem_meta(slug)
                         db.upsert_problem(slug, meta["title"], meta["difficulty"])
+
                     # insert completion (dedup by UNIQUE(user, slug))
                     inserted = db.insert_completion(tg_id, slug, ts)
                     if inserted:
                         # announce to all chats user joined
                         chats = db.get_user_chats(tg_id)
                         for chat_id, post_on_solve, scoring in chats:
+                            # skip if option disabled
                             if not post_on_solve: continue
-                            # compute user’s week counts quick
+
+                            # compute user's week counts quick
                             start,end = week_window_cst(datetime.now(timezone.utc))
                             with db.conn() as c:
                                 rows = c.execute("""
@@ -59,7 +71,11 @@ async def poll_loop():
                             # get title/difficulty for message
                             with db.conn() as c:
                                 title, diff = c.execute("SELECT title,difficulty FROM problems WHERE slug=?", (slug,)).fetchone()
-                            name = f"@{(await bot.get_chat_member(chat_id, tg_id)).user.username}" if (await bot.get_chat_member(chat_id, tg_id)).user.username else "A member"
+                            
+                            # format message
+                            member = await bot.get_chat_member(chat_id, tg_id)
+                            uname = member.user.username
+                            name = f"@{uname}" if uname else (member.user.full_name or "A member")
                             msg = f"🎉 {name} solved <b>{title}</b> (<i>{diff}</i>).\nWeekly score: <b>{total}</b>  — E:{counts.get('Easy',0)} M:{counts.get('Medium',0)} H:{counts.get('Hard',0)}"
                             try:
                                 await bot.send_message(chat_id, msg, parse_mode="HTML", disable_web_page_preview=True)
@@ -97,7 +113,7 @@ async def leaderboard(m: types.Message):
     scored.sort(key=lambda x: (-x[1], -x[2]["Hard"], -x[2]["Medium"]))
     if not scored:
         return await m.reply("No solves yet this week.")
-    lines = ["🏆 <b>This week’s leaderboard</b>\nPoint allocation: (E=1, M=2, H=5)\n"]
+    lines = ["🏆 <b>This week's leaderboard</b>\nPoint allocation: (E=1, M=2, H=5)\n"]
     rank = 1
     for uid, total, cts in scored[:10]:
         try:
