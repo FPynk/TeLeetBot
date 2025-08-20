@@ -7,7 +7,11 @@ router = Router()
 
 @router.message(Command("start"))
 async def start(m: types.Message):
-    await m.answer("Hi! Link your LeetCode with /link <username>. In groups, use /join to enter the leaderboard.")
+    await m.answer("Hi! Link your LeetCode with /link <leetcode_username>. In groups, use /join to enter the leaderboard.")
+
+@router.message(Command("help"))
+async def help(m: types.Message):
+    await m.answer("Hello! Link your LeetCode with /link <leetcode_username>. Then, in each group, use /join to begin showing your progress and enter the leaderboard leaderboard.")
 
 @router.message(Command("link"))
 async def link(m: types.Message):
@@ -26,7 +30,7 @@ async def link(m: types.Message):
         # Optional: start tracking from NOW to avoid immediate backfill announcements
         db.get_or_set_last_seen(lc, int(time.time()))
 
-        await m.reply(f"Linked to LeetCode: {lc}. I’ll track first-time ACs and post to groups you join.")
+        await m.reply(f"Linked to LeetCode: {lc}. Please use /join now. I'll track first-time ACs and post to groups you join.")
     except sqlite3.IntegrityError as e:
         # This happens if someone else has already linked this lc_username
         if "users.lc_username" in str(e):
@@ -41,7 +45,7 @@ async def unlink(m: types.Message):
         # get current lc_username (to clean last_seen)
         row = c.execute("SELECT lc_username FROM users WHERE telegram_user_id=?", (tg_id,)).fetchone()
         if not row:
-            return await m.reply("You don’t have a linked LeetCode account.")
+            return await m.reply("You don't have a linked LeetCode account.")
         lc = row[0]
         # remove memberships, user, and last_seen
         c.execute("DELETE FROM memberships WHERE telegram_user_id=?", (tg_id,))
@@ -55,14 +59,14 @@ async def join(m: types.Message):
         return await m.reply("Use /join inside a group.")
     db.set_chat(m.chat.id, m.chat.title or "")
     db.join_chat(m.chat.id, m.from_user.id)
-    await m.reply("You’re in! I’ll count your first ACs for this chat’s weekly board.")
+    await m.reply("You're in! I'll count your first ACs for this chat's weekly board.")
 
 @router.message(Command("leave"))
 async def leave(m: types.Message):
     if m.chat.type == "private":
         return await m.reply("Use /leave in the group you want to leave.")
     db.leave_chat(m.chat.id, m.from_user.id)
-    await m.reply("Left this chat’s leaderboard.")
+    await m.reply("Left this chat's leaderboard.")
 
 @router.message(Command("postonsolve"))
 async def postflag(m: types.Message):

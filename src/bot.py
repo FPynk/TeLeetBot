@@ -60,7 +60,7 @@ async def poll_loop():
                             with db.conn() as c:
                                 title, diff = c.execute("SELECT title,difficulty FROM problems WHERE slug=?", (slug,)).fetchone()
                             name = f"@{(await bot.get_chat_member(chat_id, tg_id)).user.username}" if (await bot.get_chat_member(chat_id, tg_id)).user.username else "A member"
-                            msg = f"🎉 {name} solved <b>{title}</b> (<i>{diff}</i>). Weekly score: <b>{total}</b>  — E:{counts.get('Easy',0)} M:{counts.get('Medium',0)} H:{counts.get('Hard',0)}"
+                            msg = f"🎉 {name} solved <b>{title}</b> (<i>{diff}</i>).\nWeekly score: <b>{total}</b>  — E:{counts.get('Easy',0)} M:{counts.get('Medium',0)} H:{counts.get('Hard',0)}"
                             try:
                                 await bot.send_message(chat_id, msg, parse_mode="HTML", disable_web_page_preview=True)
                             except Exception:
@@ -97,7 +97,7 @@ async def leaderboard(m: types.Message):
     scored.sort(key=lambda x: (-x[1], -x[2]["Hard"], -x[2]["Medium"]))
     if not scored:
         return await m.reply("No solves yet this week.")
-    lines = ["🏆 <b>This week’s leaderboard</b> (E=1, M=2, H=5)\n"]
+    lines = ["🏆 <b>This week’s leaderboard</b>\n(E=1, M=2, H=5)\n"]
     rank = 1
     for uid, total, cts in scored[:10]:
         try:
