@@ -113,7 +113,7 @@ async def leaderboard(m: types.Message):
     scored.sort(key=lambda x: (-x[1], -x[2]["Hard"], -x[2]["Medium"]))
     if not scored:
         return await m.reply("No solves yet this week.")
-    lines = ["🏆 <b>This week's leaderboard</b>\nPoint allocation: (E=1, M=2, H=5)\n"]
+    lines = [f"🏆 <b>This week's leaderboard</b>\nPoint allocation: (E={e}, M={mw}, H={h})\n"]
     rank = 1
     for uid, total, cts in scored[:10]:
         try:

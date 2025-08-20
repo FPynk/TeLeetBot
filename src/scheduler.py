@@ -38,7 +38,7 @@ async def weekly_leaderboards():
         scored.sort(key=lambda x: (-x[1], -x[2]["Hard"], -x[2]["Medium"]))
 
         # format leaderboard text
-        lines = ["🏆 <b>Weekly leaderboard</b> (E=1, M=2, H=5)\n"]
+        lines = [f"🏆 <b>Weekly leaderboard</b> (E={e}, M={m}, H={h})\n"]
         rank = 1
         for uid, total, cts in scored[:10]:
             try:
