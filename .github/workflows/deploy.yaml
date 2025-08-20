@@ -55,10 +55,10 @@ jobs:
 
             # idempotent DB init/migrations
             python - <<'PY'
-from src import db
-db.init()
-print("db.init() ok")
-PY
+            from src import db
+            db.init()
+            print("db.init() ok")
+            PY
 
             # quick backup (optional)
             sqlite3 bot.db ".backup 'backups/bot-$(date -u +%Y%m%d-%H%M%S).db'" || true
