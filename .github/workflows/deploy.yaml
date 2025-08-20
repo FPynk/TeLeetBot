@@ -1,0 +1,70 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile $(git ls-files '*.py')
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: SSH deploy to GCE VM
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.GCP_VM_HOST }}
+          username: ${{ secrets.GCP_VM_USER }}
+          key: ${{ secrets.GCP_VM_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /home/botuser/telegram-leetcode-bot
+
+            # Ensure the VM's repo remote points to your GitHub repo (SSH or HTTPS both fine)
+            git remote -v || true
+            # Optional: force the proper remote (replace owner/repo if needed)
+            # git remote set-url origin git@github.com:<owner>/<repo>.git
+
+            git fetch --all
+            git checkout main
+            git pull --ff-only
+
+            # venv & deps
+            python3 -m venv .venv
+            source .venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+
+            # idempotent DB init/migrations
+            python - <<'PY'
+from src import db
+db.init()
+print("db.init() ok")
+PY
+
+            # quick backup (optional)
+            sqlite3 bot.db ".backup 'backups/bot-$(date -u +%Y%m%d-%H%M%S).db'" || true
+
+            # restart and show status
+            sudo systemctl restart leetcode-bot
+            sleep 2
+            sudo systemctl --no-pager --full status leetcode-bot || true
+            journalctl -u leetcode-bot -n 50 --no-pager || true
