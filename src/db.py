@@ -114,16 +114,19 @@ def get_user_chats(telegram_user_id:int):
 def get_or_set_last_seen(lc_username: str, ts: Optional[int] = None):
     with conn() as c:
         if ts is None:
+            # retrieve last_seen_ts timestamp
             row = c.execute(
                 "SELECT last_seen_ts FROM last_seen WHERE lc_username=?",
                 (lc_username,),
             ).fetchone()
             return row[0] if row else 0
         else:
+            # grab row
             row = c.execute(
                 "SELECT 1 FROM last_seen WHERE lc_username=?",
                 (lc_username,),
             ).fetchone()
+            # update or insert
             if row:
                 c.execute(
                     "UPDATE last_seen SET last_seen_ts=? WHERE lc_username=?",
