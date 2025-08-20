@@ -18,6 +18,7 @@ async def weekly_leaderboards():
         chats = c.execute("SELECT chat_id, scoring FROM chats").fetchall()
 
     for chat_id, scoring in chats:
+        # get users and problem completions per chat 
         rows = db.weekly_counts(chat_id, start, end)
         if not rows:
             continue
@@ -29,11 +30,14 @@ async def weekly_leaderboards():
 
         e, m, h = parse_weights(scoring)
         scored = []
+        # calculate total scores
         for uid, counts in agg.items():
             total = counts["Easy"]*e + counts["Medium"]*m + counts["Hard"]*h
             scored.append((uid, total, counts))
+        # sort leaderboard
         scored.sort(key=lambda x: (-x[1], -x[2]["Hard"], -x[2]["Medium"]))
 
+        # format leaderboard text
         lines = ["🏆 <b>Weekly leaderboard</b> (E=1, M=2, H=5)\n"]
         rank = 1
         for uid, total, cts in scored[:10]:
