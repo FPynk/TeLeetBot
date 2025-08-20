@@ -59,8 +59,8 @@ jobs:
             mkdir -p "$BACKUP_DIR"
             sqlite3 -cmd ".timeout 5000" "$DB_FILE" ".backup '$BACKUP_DIR/bot-$(date -u +%Y%m%d-%H%M%S).db'"
 
-            # Restart service and show status/logs
-            sudo systemctl restart leetcode-bot
+            # Restart (non-interactive). Fail if not permitted.
+            sudo -n systemctl restart leetcode-bot || { echo 'ERROR: restart failed'; exit 1; }
             sleep 2
-            sudo systemctl --no-pager --full status leetcode-bot || true
-            journalctl -u leetcode-bot -n 50 --no-pager || true
+            sudo -n systemctl status leetcode-bot || true
+            sudo -n journalctl -u leetcode-bot -n 50 --no-pager || true
