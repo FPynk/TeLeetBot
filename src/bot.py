@@ -14,8 +14,6 @@ dp = Dispatcher()
 dp.include_router(cmd_router)
 lc = LCClient()
 
-# point allocation for easy medium hard is hardcoded here, update if you want to implement DB dependent scoring
-
 async def poll_loop():
     # let bot boot up
     await asyncio.sleep(3)
