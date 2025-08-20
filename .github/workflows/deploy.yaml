@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  test: # test code compiles
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -22,7 +22,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m py_compile $(git ls-files '*.py')
 
-  deploy:
+  deploy: # deploy to GCP VM
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -36,12 +36,10 @@ jobs:
           script_stop: true
           script: |
             set -euo pipefail
-            cd /home/botuser/telegram-leetcode-bot
+            cd /home/botuser/TeLeetBot
 
             # Ensure the VM's repo remote points to your GitHub repo (SSH or HTTPS both fine)
             git remote -v || true
-            # Optional: force the proper remote (replace owner/repo if needed)
-            # git remote set-url origin git@github.com:<owner>/<repo>.git
 
             git fetch --all
             git checkout main
