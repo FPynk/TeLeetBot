@@ -97,7 +97,7 @@ async def leaderboard(m: types.Message):
     scored.sort(key=lambda x: (-x[1], -x[2]["Hard"], -x[2]["Medium"]))
     if not scored:
         return await m.reply("No solves yet this week.")
-    lines = ["🏆 <b>This week’s leaderboard</b>\n(E=1, M=2, H=5)\n"]
+    lines = ["🏆 <b>This week’s leaderboard</b>\nPoint allocation: (E=1, M=2, H=5)\n"]
     rank = 1
     for uid, total, cts in scored[:10]:
         try:
@@ -105,7 +105,7 @@ async def leaderboard(m: types.Message):
             name = f"@{member.user.username}" if member.user.username else (member.user.full_name or str(uid))
         except Exception:
             name = str(uid)
-        lines.append(f"{rank}. {name} — <b>{total}</b>  (E:{cts['Easy']} M:{cts['Medium']} H:{cts['Hard']})")
+        lines.append(f"{rank}. {name} — <b>{total}</b> Count-(E:{cts['Easy']} M:{cts['Medium']} H:{cts['Hard']})")
         rank += 1
     await m.reply("\n".join(lines), parse_mode="HTML")
 
