@@ -59,7 +59,9 @@ async def start_schedulers():
     # 1) keep the LeetCode poller running continuously
     asyncio.get_event_loop().create_task(poll_loop())
     # 2) schedule weekly leaderboard: Monday 09:00 CST
+    print("Setting scheduler to America/Chicago time")
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("America/Chicago"))
+    print("Scheduler adding wwekly leaderboards cron job")
     scheduler.add_job(
         weekly_leaderboards,
         CronTrigger(day_of_week="wed", hour=11, minute=12)
