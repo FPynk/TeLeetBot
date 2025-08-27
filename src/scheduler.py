@@ -74,12 +74,12 @@ async def start_schedulers():
     )
 
     # Fire once 10s after startup so you can see it working
-    scheduler.add_job(
-        weekly_leaderboards,
-        trigger="date",
-        run_date=datetime.now(ZoneInfo("America/Chicago")) + timedelta(seconds=10),
-        id="weekly_leaderboard_smoke",
-        replace_existing=True,
-    )
+    # scheduler.add_job(
+    #     weekly_leaderboards,
+    #     trigger="date",
+    #     run_date=datetime.now(ZoneInfo("America/Chicago")) + timedelta(seconds=10),
+    #     id="weekly_leaderboard_smoke",
+    #     replace_existing=True,
+    # )
 
     scheduler.start()
