@@ -11,7 +11,7 @@ async def start(m: types.Message):
 
 @router.message(Command("help"))
 async def help(m: types.Message):
-    await m.answer("Hello! Link your LeetCode with /link <leetcode_username>. Then, in each group, use /join to begin showing your progress and enter the leaderboard leaderboard.")
+    await m.answer("Hello! Link your LeetCode with /link <leetcode_username>. Then, in each group, use /join to begin showing your progress and enter the leaderboard.")
 
 @router.message(Command("link"))
 async def link(m: types.Message):
