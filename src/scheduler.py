@@ -60,7 +60,7 @@ async def start_schedulers():
     asyncio.get_event_loop().create_task(poll_loop())
     # 2) schedule weekly leaderboard: Monday 09:00 CST
     now_time = datetime.now(ZoneInfo("America/Chicago"))
-    print("Setting scheduler to America/Chicago time, current time: {now_time}")
+    print(f"Setting scheduler to America/Chicago time, current time: {now_time}")
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("America/Chicago"))
     print("Scheduler adding weekly leaderboards cron job")
     cron = CronTrigger(day_of_week="wed", hour=11, minute=33)
