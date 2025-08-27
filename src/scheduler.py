@@ -1,6 +1,6 @@
 # src/scheduler.py
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -64,6 +64,20 @@ async def start_schedulers():
     print("Scheduler adding wwekly leaderboards cron job")
     scheduler.add_job(
         weekly_leaderboards,
-        CronTrigger(day_of_week="wed", hour=11, minute=12)
+        CronTrigger(day_of_week="mon", hour=9, minute=0),
+        id="weekly_leaderboard",
+        replace_existing=True,
+        misfire_grace_time=3600,   # run within an hour if missed
+        max_instances=1,
     )
+
+    # Fire once 10s after startup so you can see it working
+    scheduler.add_job(
+        weekly_leaderboards,
+        trigger="date",
+        run_date=datetime.now(ZoneInfo("America/Chicago")) + timedelta(seconds=10),
+        id="weekly_leaderboard_smoke",
+        replace_existing=True,
+    )
+
     scheduler.start()
