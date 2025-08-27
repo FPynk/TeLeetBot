@@ -69,7 +69,7 @@ async def start_schedulers():
     print(f"Setting scheduler to America/Chicago time, current time: {now_time}")
     _SCHEDULER = AsyncIOScheduler(timezone=ZoneInfo("America/Chicago"))
     print("Scheduler adding weekly leaderboards cron job")
-    cron = CronTrigger(day_of_week="wed", hour=11, minute=47)
+    cron = CronTrigger(day_of_week="wed", hour=11, minute=57)
     _SCHEDULER.add_job(
         weekly_leaderboards,
         cron,
