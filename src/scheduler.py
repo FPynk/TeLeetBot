@@ -62,22 +62,23 @@ async def start_schedulers():
     print("Setting scheduler to America/Chicago time")
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("America/Chicago"))
     print("Scheduler adding wwekly leaderboards cron job")
+    cron = CronTrigger(day_of_week="wed", hour=12, minute=1)
     scheduler.add_job(
         weekly_leaderboards,
-        CronTrigger(day_of_week="mon", hour=9, minute=0),
+        cron,
         id="weekly_leaderboard",
         replace_existing=True,
         misfire_grace_time=3600,   # run within an hour if missed
         max_instances=1,
     )
 
-    # # Fire once 10s after startup so you can see it working
-    # scheduler.add_job(
-    #     weekly_leaderboards,
-    #     trigger="date",
-    #     run_date=datetime.now(ZoneInfo("America/Chicago")) + timedelta(seconds=10),
-    #     id="weekly_leaderboard_smoke",
-    #     replace_existing=True,
-    # )
+    # Fire once 10s after startup so you can see it working
+    scheduler.add_job(
+        weekly_leaderboards,
+        trigger="date",
+        run_date=datetime.now(ZoneInfo("America/Chicago")) + timedelta(seconds=10),
+        id="weekly_leaderboard_smoke",
+        replace_existing=True,
+    )
 
     scheduler.start()
