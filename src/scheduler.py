@@ -63,7 +63,7 @@ async def start_schedulers():
     print(f"[setup] Setting scheduler to America/Chicago time, current time: {now_time}")
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("America/Chicago"))
     print("[setup] Scheduler adding weekly leaderboards cron job")
-    cron = CronTrigger(day_of_week="wed", hour=12, minute=39, start_date=now_time)
+    cron = CronTrigger(day_of_week="mon", hour=12, minute=00, start_date=now_time)
     nxt = cron.get_next_fire_time(previous_fire_time=None, now=now_time)
     print(f"[setup] weekly_leaderboard next fire per trigger: {nxt}")
 
