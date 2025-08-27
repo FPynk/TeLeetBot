@@ -76,7 +76,7 @@ async def start_schedulers():
         misfire_grace_time=3600,   # run within an hour if missed
         max_instances=1,
     )
-    print(f"[setup] next run time: {scheduler.get_next_fire_time}")
+    print(f"[setup] next run time: {scheduler.next_run_time}")
 
     # Fire once 10s after startup so you can see it working
     # scheduler.add_job(
