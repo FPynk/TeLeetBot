@@ -70,7 +70,7 @@ async def start_schedulers():
         day_of_week="wed",
         hour=12,
         minute=25,
-        start_date=now_time
+        start_date=now_time,
         id="weekly_leaderboard",
         replace_existing=True,
         misfire_grace_time=3600,   # run within an hour if missed
