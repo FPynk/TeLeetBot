@@ -64,19 +64,19 @@ async def start_schedulers():
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("America/Chicago"))
     print("[setup] Scheduler adding weekly leaderboards cron job")
     # cron = CronTrigger(day_of_week="wed", hour=12, minute=20, start_date=now_time)
-    scheduler.add_job(
+    job = scheduler.add_job(
         weekly_leaderboards,
         'cron',
         day_of_week="wed",
         hour=12,
-        minute=25,
+        minute=33,
         start_date=now_time,
         id="weekly_leaderboard",
         replace_existing=True,
         misfire_grace_time=3600,   # run within an hour if missed
         max_instances=1,
     )
-    print(f"[setup] next run time: {scheduler.next_run_time}")
+    print(f"[setup] next run time: {job.next_run_time}")
 
     # Fire once 10s after startup so you can see it working
     # scheduler.add_job(
