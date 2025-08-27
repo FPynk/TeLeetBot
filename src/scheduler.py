@@ -13,6 +13,8 @@ from src.timeutil import week_window_cst
 async def weekly_leaderboards():
     tz = ZoneInfo("America/Chicago")
     start, end = week_window_cst(datetime.now(timezone.utc))
+    # logging
+    print(f"Posting weekly leaderboard for {start}-{end}")
     # get all chats + their weights
     with db.conn() as c:
         chats = c.execute("SELECT chat_id, scoring FROM chats").fetchall()
@@ -60,6 +62,6 @@ async def start_schedulers():
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("America/Chicago"))
     scheduler.add_job(
         weekly_leaderboards,
-        CronTrigger(day_of_week="mon", hour=9, minute=0)
+        CronTrigger(day_of_week="wed", hour=11, minute=12)
     )
     scheduler.start()
