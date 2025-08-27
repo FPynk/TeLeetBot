@@ -10,8 +10,6 @@ from src import db
 from src.scoring import parse_weights
 from src.timeutil import week_window_cst
 
-_SCHEDULER: AsyncIOScheduler | None = None
-
 async def weekly_leaderboards():
     tz = ZoneInfo("America/Chicago")
     start, end = week_window_cst(datetime.now(timezone.utc))
@@ -58,26 +56,27 @@ async def weekly_leaderboards():
             pass
 
 async def start_schedulers():
-    global _SCHEDULER
-    if _SCHEDULER and _SCHEDULER.running:
-        return _SCHEDULER  # already started
-    
     # 1) keep the LeetCode poller running continuously
     asyncio.get_event_loop().create_task(poll_loop())
     # 2) schedule weekly leaderboard: Monday 09:00 CST
     now_time = datetime.now(ZoneInfo("America/Chicago"))
-    print(f"Setting scheduler to America/Chicago time, current time: {now_time}")
-    _SCHEDULER = AsyncIOScheduler(timezone=ZoneInfo("America/Chicago"))
-    print("Scheduler adding weekly leaderboards cron job")
-    cron = CronTrigger(day_of_week="wed", hour=11, minute=57)
-    _SCHEDULER.add_job(
+    print(f"[setup] Setting scheduler to America/Chicago time, current time: {now_time}")
+    scheduler = AsyncIOScheduler(timezone=ZoneInfo("America/Chicago"))
+    print("[setup] Scheduler adding weekly leaderboards cron job")
+    # cron = CronTrigger(day_of_week="wed", hour=12, minute=20, start_date=now_time)
+    scheduler.add_job(
         weekly_leaderboards,
-        cron,
+        'cron',
+        day_of_week="wed",
+        hour=12,
+        minute=25,
+        start_date=now_time
         id="weekly_leaderboard",
         replace_existing=True,
         misfire_grace_time=3600,   # run within an hour if missed
         max_instances=1,
     )
+    print(f"[setup] next run time: {scheduler.get_next_fire_time}")
 
     # Fire once 10s after startup so you can see it working
     # scheduler.add_job(
@@ -88,4 +87,4 @@ async def start_schedulers():
     #     replace_existing=True,
     # )
 
-    _SCHEDULER.start()
+    scheduler.start()
