@@ -1,0 +1,27 @@
+services:
+  te-leet-bot:
+    # build: .
+    image: ghcr.io/FPynk/teleetbot:main
+    container_name: te-leet-bot
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - TZ=America/Chicago
+    # bind mount host paths left to container paths right
+    volumes:
+      - ./data/bot.db:/app/bot.db
+      - ./data/backups:/app/backups
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    # Prevent the process from gaining extra privileges via setuid/setcap—reduces escalation risk.
+    security_opt:
+      - no-new-privileges:true
+      # Drop all Linux capabilities (the process keeps only basic, unprivileged abilities).
+    cap_drop:
+      - ALL
+    # Limit container log file growth on the host: 3 files x 10 MB each (~ 30 MB total).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

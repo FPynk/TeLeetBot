@@ -3,3 +3,4 @@
 bot.db
 src/__pycache__/
 src/schema.sql
+data/
