@@ -1,7 +1,7 @@
 services:
   te-leet-bot:
     # build: .
-    image: ghcr.io/FPynk/teleetbot:main
+    image: ghcr.io/fpynk/teleetbot:main
     container_name: te-leet-bot
     environment:
       - BOT_TOKEN=${BOT_TOKEN}

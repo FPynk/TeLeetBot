@@ -24,7 +24,9 @@ jobs:
 
       # Make a lowercase owner and export it for later steps
       - name: Compute OWNER_LC
-        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+        run: 
+          echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+          echo $OWNER_LC
 
       - name: Log in to GHCR
         run: echo "${{ github.token }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
