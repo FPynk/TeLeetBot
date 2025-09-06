@@ -15,19 +15,26 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      REGISTRY: ghcr.io
+      OWNER_LC: ${{ github.repository_owner | toLower }}   # <- owner, lowercased
+      IMAGE_NAME: teleetbot                                # <- pick your image name (lowercase)
+      TAG: main
     steps:
       - uses: actions/checkout@v4
+
       - name: Log in to GHCR
-        run: echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-        # Logs the runner's Docker to GHCR using the built-in GITHUB_TOKEN.
+        run: echo "${{ github.token }}" | docker login $REGISTRY -u ${{ github.actor }} --password-stdin
+        # Logs Docker into GHCR using the workflow token (needs packages: write).
 
-      - name: Build image
-        run: docker build -t ghcr.io/${{ github.repository_owner }}/teleetbot:main .
-        # Builds your image and tags it for GHCR.
+      - name: Build
+        run: docker build -t $REGISTRY/$OWNER_LC/$IMAGE_NAME:$TAG .
+        # Builds image and tags it ghcr.io/<owner>/<image>:main
 
-      - name: Push image
-        run: docker push ghcr.io/${{ github.repository_owner }}/teleetbot:main
-        # Pushes the image so your homelab can pull it.
+      - name: Push
+        run: docker push $REGISTRY/$OWNER_LC/$IMAGE_NAME:$TAG
+        # Pushes to GHCR
+
 
   deploy:
     needs: build-and-push
@@ -48,7 +55,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HOMELAB_SSH_HOST }}  
-          username: ${{ secrets.HOMELAB_SSH_USER }} # fpynk
+          username: ${{ secrets.HOMELAB_SSH_USER }}
           key: ${{ secrets.HOMELAB_SSH_KEY }}     # private key allowed on the Beelink
           script_stop: true
           script: |
