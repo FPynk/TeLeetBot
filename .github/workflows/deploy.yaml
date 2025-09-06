@@ -51,21 +51,20 @@ jobs:
         # Joins your tailnet as an ephemeral, tagged device (no 90d key). After this step,
         # the runner can reach homelab privately over Tailscale.
 
-      - name: Deploy via SSH over Tailscale
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.HOMELAB_SSH_HOST }}  
-          username: ${{ secrets.HOMELAB_SSH_USER }}
-          key: ${{ secrets.HOMELAB_SSH_KEY }}     # private key allowed on the Beelink
-          script_stop: true
-          script: |
+      - name: Sanity (TS reachability)
+        run: |
+          tailscale status            # Shows peers; confirms we're on the tailnet.
+          tailscale ping -c 3 fpynkhomelab || tailscale ping -c 3 100.110.8.13
+      # Explainer: verifies we can reach your Beelink via TS name or IP.
+
+      - name: Deploy via Tailscale SSH (no keys)
+        run: |
+          tailscale ssh fpynk@fpynkhomelab -- '
             set -Eeuo pipefail
-            cd /srv/apps/teleetbot                           # Go to compose project.
-            if docker ps --format '{{.Names}}' | grep -q '^te-leet-bot$'; then
-              docker exec te-leet-bot sqlite3 /app/bot.db ".backup '/app/backups/bot-ci-$(date -u +%Y%m%d-%H%M%S).db'" || true
-            fi                                               # Optional pre-update DB snapshot.
-            docker compose pull                              # Pull the new GHCR tag.
-            docker compose up -d                             # Recreate the container.
-            docker inspect -f '{{.State.Health.Status}}' te-leet-bot || true
+            cd /srv/apps/teleetbot            # go to compose project
+            docker compose pull               # fetch new GHCR image
+            docker compose up -d              # recreate container
+            docker inspect -f "{{.State.Health.Status}}" te-leet-bot || true
             docker compose ps
-        # Runs the usual pull+restart entirely over your private tailnet.
+          '
+      # Explainer: executes the deploy commands over Tailscale SSH using tailnet identity + ACLs.
