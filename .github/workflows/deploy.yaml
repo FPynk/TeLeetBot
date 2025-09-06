@@ -1,8 +1,8 @@
-name: CI/CD
+name: CI/CD (GHCR + Tailscale OAuth)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 concurrency:
@@ -10,57 +10,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test: # test code compiles
+  build-and-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: python -m pip install --upgrade pip
-      - run: pip install -r requirements.txt
-      - run: python -m py_compile $(git ls-files '*.py')
+      - name: Log in to GHCR
+        run: echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        # Logs the runner's Docker to GHCR using the built-in GITHUB_TOKEN.
 
-  deploy: # deploy to GCP VM
-    needs: test
+      - name: Build image
+        run: docker build -t ghcr.io/${{ github.repository_owner }}/teleetbot:main .
+        # Builds your image and tags it for GHCR.
+
+      - name: Push image
+        run: docker push ghcr.io/${{ github.repository_owner }}/teleetbot:main
+        # Pushes the image so your homelab can pull it.
+
+  deploy:
+    needs: build-and-push
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: SSH deploy to GCE VM
+      - name: Connect to tailnet via OAuth
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          use-cache: 'true'
+        # Joins your tailnet as an ephemeral, tagged device (no 90d key). After this step,
+        # the runner can reach homelab privately over Tailscale.
+
+      - name: Deploy via SSH over Tailscale
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.GCP_VM_HOST }}
-          username: ${{ secrets.GCP_VM_USER }}
-          key: ${{ secrets.GCP_VM_SSH_KEY }}
+          host: ${{ secrets.HOMELAB_SSH_HOST }}  
+          username: ${{ secrets.HOMELAB_SSH_USER }} # fpynk
+          key: ${{ secrets.HOMELAB_SSH_KEY }}     # private key allowed on the Beelink
           script_stop: true
           script: |
-            set -e
-
-            APP_DIR="/home/botuser/TeLeetBot"
-            BACKUP_DIR="$APP_DIR/backups"
-            DB_FILE="$APP_DIR/bot.db"
-
-            cd "$APP_DIR"
-
-            git fetch --all
-            git checkout main
-            git pull --ff-only
-
-            python3 -m venv .venv
-            . .venv/bin/activate
-            pip install --upgrade pip
-            pip install -r requirements.txt
-
-            # Idempotent DB init
-            python -c "from src import db; db.init(); print('db.init() ok')"
-
-            # Ensure backup dir exists, then backup with a small timeout (handles locks)
-            mkdir -p "$BACKUP_DIR"
-            sqlite3 -cmd ".timeout 5000" "$DB_FILE" ".backup '$BACKUP_DIR/bot-$(date -u +%Y%m%d-%H%M%S).db'"
-
-            # Restart (non-interactive). Fail if not permitted.
-            sudo -n systemctl restart leetcode-bot || { echo 'ERROR: restart failed'; exit 1; }
-            sleep 2
-            sudo -n systemctl status leetcode-bot || true
-            sudo -n journalctl -u leetcode-bot -n 50 --no-pager || true
+            set -Eeuo pipefail
+            cd /srv/apps/teleetbot                           # Go to compose project.
+            if docker ps --format '{{.Names}}' | grep -q '^te-leet-bot$'; then
+              docker exec te-leet-bot sqlite3 /app/bot.db ".backup '/app/backups/bot-ci-$(date -u +%Y%m%d-%H%M%S).db'" || true
+            fi                                               # Optional pre-update DB snapshot.
+            docker compose pull                              # Pull the new GHCR tag.
+            docker compose up -d                             # Recreate the container.
+            docker inspect -f '{{.State.Health.Status}}' te-leet-bot || true
+            docker compose ps
+        # Runs the usual pull+restart entirely over your private tailnet.
