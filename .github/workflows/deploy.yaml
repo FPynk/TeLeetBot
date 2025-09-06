@@ -44,9 +44,9 @@ jobs:
       - name: Connect to tailnet via OAuth
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:GitHub-CD
           use-cache: 'true'
         # Joins your tailnet as an ephemeral, tagged device (no 90d key). After this step,
         # the runner can reach homelab privately over Tailscale.
