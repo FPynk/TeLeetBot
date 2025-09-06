@@ -46,7 +46,7 @@ jobs:
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
-          tags: tag:GitHub-CD
+          tags: tag:github-cd
           use-cache: 'true'
         # Joins your tailnet as an ephemeral, tagged device (no 90d key). After this step,
         # the runner can reach homelab privately over Tailscale.
