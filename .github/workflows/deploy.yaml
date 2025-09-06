@@ -53,8 +53,7 @@ jobs:
 
       - name: Sanity (TS reachability)
         run: |
-          tailscale status            # Shows peers; confirms we're on the tailnet.
-          tailscale ping -c 3 fpynkhomelab || tailscale ping -c 3 100.110.8.13
+          tailscale ping -c 3 fpynkhomelab || tailscale ping -c 3 ${{ HOMELAB_SSH_HOST }}
       # Explainer: verifies we can reach your Beelink via TS name or IP.
 
       - name: Deploy via Tailscale SSH (no keys)
