@@ -17,7 +17,7 @@ jobs:
       packages: write
     env:
       REGISTRY: ghcr.io
-      OWNER_LC: ${{ github.repository_owner | toLower }}   # <- owner, lowercased
+      OWNER_LC: ${{ toLower(github.repository_owner) }}   # <- owner, lowercased
       IMAGE_NAME: teleetbot                                # <- pick your image name (lowercase)
       TAG: main
     steps:
