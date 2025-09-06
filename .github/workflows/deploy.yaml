@@ -17,23 +17,23 @@ jobs:
       packages: write
     env:
       REGISTRY: ghcr.io
-      OWNER_LC: ${{ toLower(github.repository_owner) }}   # <- owner, lowercased
-      IMAGE_NAME: teleetbot                                # <- pick your image name (lowercase)
+      IMAGE_NAME: teleetbot
       TAG: main
     steps:
       - uses: actions/checkout@v4
 
+      # Make a lowercase owner and export it for later steps
+      - name: Compute OWNER_LC
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Log in to GHCR
-        run: echo "${{ github.token }}" | docker login $REGISTRY -u ${{ github.actor }} --password-stdin
-        # Logs Docker into GHCR using the workflow token (needs packages: write).
+        run: echo "${{ github.token }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
 
       - name: Build
-        run: docker build -t $REGISTRY/$OWNER_LC/$IMAGE_NAME:$TAG .
-        # Builds image and tags it ghcr.io/<owner>/<image>:main
+        run: docker build -t "$REGISTRY/$OWNER_LC/$IMAGE_NAME:$TAG" .
 
       - name: Push
-        run: docker push $REGISTRY/$OWNER_LC/$IMAGE_NAME:$TAG
-        # Pushes to GHCR
+        run: docker push "$REGISTRY/$OWNER_LC/$IMAGE_NAME:$TAG"
 
 
   deploy:
