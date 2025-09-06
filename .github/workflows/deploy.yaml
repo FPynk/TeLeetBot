@@ -65,5 +65,5 @@ jobs:
             docker compose up -d              # recreate container
             docker inspect -f "{{.State.Health.Status}}" te-leet-bot || true
             docker compose ps
-          ' 
+          '
       # Explainer: executes the deploy commands over Tailscale SSH using tailnet identity + ACLs.
