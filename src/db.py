@@ -13,8 +13,6 @@ def conn(db_path="bot.db"):
     finally:
         c.close()
 
-SCHEMA_SQL = open(__file__.replace("db.py","schema.sql"), "w+")  # not used; for brevity
-
 def init():
     with conn() as c:
         c.executescript("""
@@ -54,17 +52,80 @@ def init():
           telegram_user_id INTEGER NOT NULL,
           slug             TEXT NOT NULL,
           solved_at_utc    INTEGER NOT NULL,
-          UNIQUE (telegram_user_id, slug),
+          is_deleted       INTEGER NOT NULL DEFAULT 0,
           FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE,
           FOREIGN KEY (slug) REFERENCES problems(slug) ON DELETE CASCADE
         );
-        CREATE INDEX IF NOT EXISTS idx_completions_user_time ON completions(telegram_user_id, solved_at_utc);
 
         CREATE TABLE IF NOT EXISTS last_seen (
           lc_username TEXT PRIMARY KEY,
           last_seen_ts INTEGER NOT NULL
         );
         """)
+        _migrate_completions(c)
+
+def _migrate_completions(c: sqlite3.Connection):
+    row = c.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='completions'"
+    ).fetchone()
+    table_sql = row[0] if row else ""
+    normalized_sql = (table_sql or "").replace(" ", "").replace("\n", "").lower()
+    has_old_unique = "unique(telegram_user_id,slug)" in normalized_sql
+    columns = {r[1] for r in c.execute("PRAGMA table_info(completions)").fetchall()}
+    has_is_deleted = "is_deleted" in columns
+
+    if has_old_unique:
+        _rebuild_completions_table(c)
+    else:
+        if table_sql and not has_is_deleted:
+            c.execute(
+                "ALTER TABLE completions ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0"
+            )
+        _ensure_completions_indexes(c)
+
+def _rebuild_completions_table(c: sqlite3.Connection):
+    c.execute("PRAGMA foreign_keys=OFF;")
+    try:
+        c.execute("BEGIN IMMEDIATE;")
+        c.execute(
+            """
+            CREATE TABLE completions_new (
+              id               INTEGER PRIMARY KEY AUTOINCREMENT,
+              telegram_user_id INTEGER NOT NULL,
+              slug             TEXT NOT NULL,
+              solved_at_utc    INTEGER NOT NULL,
+              is_deleted       INTEGER NOT NULL DEFAULT 0,
+              FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE,
+              FOREIGN KEY (slug) REFERENCES problems(slug) ON DELETE CASCADE
+            );
+            """
+        )
+        c.execute(
+            """
+            INSERT INTO completions_new(id, telegram_user_id, slug, solved_at_utc, is_deleted)
+            SELECT id, telegram_user_id, slug, solved_at_utc, 0 FROM completions;
+            """
+        )
+        c.execute("DROP TABLE completions;")
+        c.execute("ALTER TABLE completions_new RENAME TO completions;")
+        _ensure_completions_indexes(c)
+        c.execute("COMMIT;")
+    except Exception:
+        c.execute("ROLLBACK;")
+        raise
+    finally:
+        c.execute("PRAGMA foreign_keys=ON;")
+
+def _ensure_completions_indexes(c: sqlite3.Connection):
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_completions_user_time ON completions(telegram_user_id, solved_at_utc)"
+    )
+    c.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_compl_user_slug_active ON completions(telegram_user_id, slug) WHERE is_deleted=0"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_compl_user_slug_deleted ON completions(telegram_user_id, slug, is_deleted)"
+    )
 
 def upsert_user(telegram_user_id:int, tg_username:str, lc_username:str):
     now=int(time.time())
@@ -144,13 +205,30 @@ def upsert_problem(slug:str, title:str, difficulty:str):
         c.execute("INSERT OR IGNORE INTO problems(slug,title,difficulty) VALUES(?,?,?)", (slug,title,difficulty))
 
 def insert_completion(telegram_user_id:int, slug:str, solved_at_utc:int) -> bool:
+    THIRTY_DAYS = 30 * 86400
     with conn() as c:
-        try:
-            c.execute("INSERT INTO completions(telegram_user_id,slug,solved_at_utc) VALUES(?,?,?)",
-                      (telegram_user_id, slug, solved_at_utc))
+        row = c.execute("""
+            SELECT id, solved_at_utc FROM completions
+            WHERE telegram_user_id=? AND slug=? AND is_deleted=0
+        """, (telegram_user_id, slug)).fetchone()
+
+        if row is None:
+            c.execute("""
+              INSERT INTO completions(telegram_user_id,slug,solved_at_utc,is_deleted)
+              VALUES(?,?,?,0)
+            """, (telegram_user_id, slug, solved_at_utc))
             return True
-        except sqlite3.IntegrityError:
-            return False  # duplicate slug for this user
+
+        existing_id, existing_ts = row
+        if solved_at_utc - existing_ts >= THIRTY_DAYS:
+            c.execute("UPDATE completions SET is_deleted=1 WHERE id=?", (existing_id,))
+            c.execute("""
+              INSERT INTO completions(telegram_user_id,slug,solved_at_utc,is_deleted)
+              VALUES(?,?,?,0)
+            """, (telegram_user_id, slug, solved_at_utc))
+            return True
+
+        return False
 
 def weekly_counts(chat_id:int, start:int, end:int):
     with conn() as c:
@@ -162,5 +240,6 @@ def weekly_counts(chat_id:int, start:int, end:int):
             WHERE m.chat_id = ?
               AND co.solved_at_utc >= ?
               AND co.solved_at_utc < ?
+              AND co.is_deleted = 0
             GROUP BY co.telegram_user_id, p.difficulty
         """, (chat_id, start, end)).fetchall()
