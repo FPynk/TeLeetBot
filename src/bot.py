@@ -97,15 +97,38 @@ async def poll_loop():
 
 @dp.message(Command("leaderboard"))
 async def leaderboard(m: types.Message):
+    requester = m.from_user
+    print(
+        f"[Info] /leaderboard used chat_id={m.chat.id} chat_type={m.chat.type} "
+        f"chat_title={m.chat.title or ''} from_id={requester.id} "
+        f"from_username={requester.username or ''}"
+    )
     chat_id = m.chat.id
     # ensure chat exists
-    db.set_chat(chat_id, m.chat.title or "")
+    try:
+        db.set_chat(chat_id, m.chat.title or "")
+        print(f"[Info] leaderboard set_chat ok chat_id={chat_id}")
+    except Exception as e:
+        print(f"[Error] leaderboard set_chat failed chat_id={chat_id} exc={e}")
+        raise
     # get weights
-    with db.conn() as c:
-        scoring = c.execute("SELECT scoring FROM chats WHERE chat_id=?", (chat_id,)).fetchone()[0]
+    try:
+        with db.conn() as c:
+            scoring = c.execute(
+                "SELECT scoring FROM chats WHERE chat_id=?", (chat_id,)
+            ).fetchone()[0]
+        print(f"[Info] leaderboard scoring fetched chat_id={chat_id} scoring={scoring}")
+    except Exception as e:
+        print(f"[Error] leaderboard scoring fetch failed chat_id={chat_id} exc={e}")
+        raise
     e,mw,h = parse_weights(scoring)
     start,end = week_window_cst(datetime.now(timezone.utc))
-    rows = db.weekly_counts(chat_id, start, end)  # [(tg_id, diff, count)]
+    try:
+        rows = db.weekly_counts(chat_id, start, end)  # [(tg_id, diff, count)]
+        print(f"[Info] leaderboard weekly_counts chat_id={chat_id} rows={len(rows)}")
+    except Exception as e:
+        print(f"[Error] leaderboard weekly_counts failed chat_id={chat_id} exc={e}")
+        raise
     # aggregate
     agg = {}
     for uid, diff, c in rows:
@@ -118,7 +141,9 @@ async def leaderboard(m: types.Message):
         scored.append((uid, total, counts))
     scored.sort(key=lambda x: (-x[1], -x[2]["Hard"], -x[2]["Medium"]))
     if not scored:
+        print(f"[Info] leaderboard no scores chat_id={chat_id}")
         return await m.reply("No solves yet this week.")
+    print(f"[Info] leaderboard scored_users chat_id={chat_id} count={len(scored)}")
     lines = [f"🏆 <b>This week's leaderboard</b>\nPoint allocation: (E={e}, M={mw}, H={h})\n"]
     rank = 1
     failed_unames = []
@@ -145,7 +170,12 @@ async def leaderboard(m: types.Message):
         lines.append(
             "Debug: " + ", ".join(failed_unames) + ", please use /relink <leetcode_username>"
         )
-    await m.reply("\n".join(lines), parse_mode="HTML")
+    try:
+        await m.reply("\n".join(lines), parse_mode="HTML")
+        print(f"[Info] leaderboard reply sent chat_id={chat_id}")
+    except Exception as e:
+        print(f"[Error] leaderboard reply failed chat_id={chat_id} exc={e}")
+        raise
 
 @dp.message(Command("stats"))
 async def stats(m: types.Message):
