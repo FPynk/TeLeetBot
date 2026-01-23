@@ -1,5 +1,4 @@
 import asyncio, time
-from html import escape
 from datetime import datetime, timezone
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -15,21 +14,13 @@ dp = Dispatcher()
 dp.include_router(cmd_router)
 lc = LCClient()
 
-def format_member_name_html(tg_username: str) -> str:
-    """Return an HTML-safe display name from stored tg_username."""
-    if tg_username:
-        handle = tg_username.lstrip("@")
-        safe = escape(handle)
-        return f'<a href="https://t.me/{safe}">@{safe}</a>'
-    return "A member"
-
 async def poll_loop():
     # let bot boot up
     await asyncio.sleep(3)
     # main logic loop
     while True:
-        users = db.get_tracked_users()  # [(tg_id, lc_username, tg_username)]
-        for tg_id, lc_user, tg_username in users:
+        users = db.get_tracked_users()  # [(tg_id, lc_username)]
+        for tg_id, lc_user in users:
             try:
                 # get last processed AC timestamp
                 cutoff = db.get_or_set_last_seen(lc_user) or 0
@@ -80,26 +71,14 @@ async def poll_loop():
                                 title, diff = c.execute("SELECT title,difficulty FROM problems WHERE slug=?", (slug,)).fetchone()
                             
                             # format message
-                            member = None
-                            try:
-                                member = await bot.get_chat_member(chat_id, tg_id)
-                            except Exception:
-                                member = None
-                            if member:
-                                uname = member.user.username
-                                if uname:
-                                    handle = uname.lstrip("@")
-                                    safe = escape(handle)
-                                    name_html = f'<a href="https://t.me/{safe}">@{safe}</a>'
-                                else:
-                                    name_html = escape(member.user.full_name or "A member")
-                            else:
-                                name_html = format_member_name_html(tg_username)
-                            msg = f"🎉 {name_html} solved <b>{title}</b> (<i>{diff}</i>).\nWeekly score: <b>{total}</b>  — E:{counts.get('Easy',0)} M:{counts.get('Medium',0)} H:{counts.get('Hard',0)}"
+                            member = await bot.get_chat_member(chat_id, tg_id)
+                            uname = member.user.username
+                            name = f"@{uname}" if uname else (member.user.full_name or "A member")
+                            msg = f"🎉 {name} solved <b>{title}</b> (<i>{diff}</i>).\nWeekly score: <b>{total}</b>  — E:{counts.get('Easy',0)} M:{counts.get('Medium',0)} H:{counts.get('Hard',0)}"
                             try:
                                 await bot.send_message(chat_id, msg, parse_mode="HTML", disable_web_page_preview=True)
-                            except Exception as e:
-                                print(f\"[poll] send_message failed chat={chat_id} user={tg_id}: {e}\")
+                            except Exception:
+                                pass
                     # bump last_seen as we walk forward
                     db.get_or_set_last_seen(lc_user, ts)
             except Exception:
