@@ -71,7 +71,14 @@ async def poll_loop():
                                 title, diff = c.execute("SELECT title,difficulty FROM problems WHERE slug=?", (slug,)).fetchone()
                             
                             # format message
-                            member = await bot.get_chat_member(chat_id, tg_id)
+                            try:
+                                member = await bot.get_chat_member(chat_id, tg_id)
+                            except Exception as e:
+                                print(
+                                    f"[Error] get_chat_member failed chat_id={chat_id} "
+                                    f"tg_id={tg_id} lc_username={lc_user} exc={e}"
+                                )
+                                continue
                             uname = member.user.username
                             name = f"@{uname}" if uname else (member.user.full_name or "A member")
                             msg = f"🎉 {name} solved <b>{title}</b> (<i>{diff}</i>).\nWeekly score: <b>{total}</b>  — E:{counts.get('Easy',0)} M:{counts.get('Medium',0)} H:{counts.get('Hard',0)}"
@@ -117,7 +124,10 @@ async def leaderboard(m: types.Message):
         try:
             member = await bot.get_chat_member(chat_id, uid)
             name = f"@{member.user.username}" if member.user.username else (member.user.full_name or str(uid))
-        except Exception:
+        except Exception as e:
+            print(
+                f"[Error] get_chat_member failed chat_id={chat_id} tg_id={uid} exc={e}"
+            )
             name = str(uid)
         lines.append(f"{rank}. {name} — <b>{total}</b> (E:{cts['Easy']} M:{cts['Medium']} H:{cts['Hard']})")
         rank += 1
