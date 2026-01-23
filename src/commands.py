@@ -53,6 +53,83 @@ async def unlink(m: types.Message):
         c.execute("DELETE FROM last_seen WHERE lc_username=?", (lc,))
     await m.reply("Unlinked. You can /link another LeetCode username anytime.")
 
+# Used to swap the telegram_user_id and telegram_username to new ones based on the LC account
+# To fix an issue where telegram_user_id would change over time for some reason
+@router.message(Command("relink"))
+async def relink(m: types.Message):
+    parts = (m.text or "").split()
+    if len(parts) != 2:
+        return await m.reply("Usage: /relink <leetcode_username>")
+
+    lc = parts[1].strip()
+    tg_id = m.from_user.id
+    tg_un = m.from_user.username or ""
+
+    msg = None
+    with db.conn() as c:
+        # Look up the existing Telegram owner for this LC username.
+        row = c.execute(
+            "SELECT telegram_user_id FROM users WHERE lc_username=?",
+            (lc,),
+        ).fetchone()
+        if not row:
+            # LC username isn't linked yet.
+            msg = "That LeetCode username isn't linked yet. Use /link <leetcode_username> first."
+        else:
+            old_tg_id = row[0]
+            if old_tg_id == tg_id:
+                # Same Telegram user; only refresh their @username.
+                c.execute(
+                    "UPDATE users SET tg_username=? WHERE telegram_user_id=?",
+                    (tg_un, tg_id),
+                )
+                msg = f"You're already linked to {lc}. I refreshed your Telegram username."
+            else:
+                # Prevent a Telegram account from linking to two different LC accounts.
+                other = c.execute(
+                    "SELECT lc_username FROM users WHERE telegram_user_id=?",
+                    (tg_id,),
+                ).fetchone()
+                if other and other[0] != lc:
+                    msg = (
+                        f"Your Telegram is already linked to LeetCode '{other[0]}'. "
+                        f"Use /unlink first, then /relink {lc}."
+                    )
+                else:
+                    # Temporarily disable FK checks to swap user IDs safely.
+                    c.execute("PRAGMA foreign_keys=OFF;")
+                    # Copy old memberships to the new Telegram ID.
+                    c.execute(
+                        """
+                        INSERT OR IGNORE INTO memberships(chat_id, telegram_user_id)
+                        SELECT chat_id, ? FROM memberships WHERE telegram_user_id=?
+                        """,
+                        (tg_id, old_tg_id),
+                    )
+                    # Remove memberships attached to the old Telegram ID.
+                    c.execute(
+                        "DELETE FROM memberships WHERE telegram_user_id=?",
+                        (old_tg_id,),
+                    )
+                    # Move historical completions to the new Telegram ID.
+                    c.execute(
+                        "UPDATE completions SET telegram_user_id=? WHERE telegram_user_id=?",
+                        (tg_id, old_tg_id),
+                    )
+                    # Update the user row to use the new Telegram ID + username.
+                    c.execute(
+                        "UPDATE users SET telegram_user_id=?, tg_username=? WHERE lc_username=?",
+                        (tg_id, tg_un, lc),
+                    )
+                    # Restore FK enforcement.
+                    c.execute("PRAGMA foreign_keys=ON;")
+                    msg = (
+                        f"Relinked {lc} to your Telegram account. "
+                        "If you were in groups, you're still on their leaderboards."
+                    )
+
+    await m.reply(msg)
+
 @router.message(Command("join"))
 async def join(m: types.Message):
     if m.chat.type == "private":
