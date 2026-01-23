@@ -24,6 +24,12 @@ Telegram bot to track leetcode progress for groups of people
 - Who: Anyone
 - What: Unlinks your account and deletes your data (memberships, completions, last_seen). You can /link again later.
 
+`/relink <leetcode_username>`
+- Where: DM or Group
+- Who: Anyone
+- What: Reassigns an existing LeetCode link to your current Telegram account (migrates memberships/completions). Use if your Telegram account changed and the bot can’t resolve you.
+- Usage: /relink FluorescentPink
+
 `/join`
 - Where: Group
 - Who: Anyone
