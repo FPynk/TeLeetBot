@@ -162,7 +162,9 @@ def leave_chat(chat_id:int, telegram_user_id:int):
 
 def get_tracked_users():
     with conn() as c:
-        return c.execute("SELECT telegram_user_id, lc_username FROM users").fetchall()
+        return c.execute(
+            "SELECT telegram_user_id, lc_username, tg_username FROM users"
+        ).fetchall()
 
 def get_user_chats(telegram_user_id:int):
     with conn() as c:

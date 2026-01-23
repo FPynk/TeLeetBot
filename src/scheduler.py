@@ -44,14 +44,30 @@ async def weekly_leaderboards():
         # format leaderboard text
         lines = [f"🏆 <b>Weekly leaderboard</b> (E={e}, M={m}, H={h})\n"]
         rank = 1
+        failed_unames = []
         for uid, total, cts in scored[:10]:
+            with db.conn() as c:
+                row = c.execute(
+                    "SELECT tg_username FROM users WHERE telegram_user_id=?",
+                    (uid,),
+                ).fetchone()
+            tg_un = row[0] if row and row[0] else ""
             try:
                 member = await bot.get_chat_member(chat_id, uid)
                 name = f"@{member.user.username}" if member.user.username else (member.user.full_name or str(uid))
-            except Exception:
-                name = str(uid)
+            except Exception as e:
+                print(
+                    f"[Error] get_chat_member failed chat_id={chat_id} tg_id={uid} tg_username={tg_un} exc={e}"
+                )
+                name = f"@{tg_un}" if tg_un else str(uid)
+                if tg_un:
+                    failed_unames.append(f"@{tg_un}")
             lines.append(f"{rank}. {name} — <b>{total}</b>  (E:{cts['Easy']} M:{cts['Medium']} H:{cts['Hard']})")
             rank += 1
+        if failed_unames:
+            lines.append(
+                "Debug: " + ", ".join(failed_unames) + ", please use /relink <leetcode_username>"
+            )
         try:
             await bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
         except Exception:

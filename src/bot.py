@@ -19,8 +19,9 @@ async def poll_loop():
     await asyncio.sleep(3)
     # main logic loop
     while True:
-        users = db.get_tracked_users()  # [(tg_id, lc_username)]
-        for tg_id, lc_user in users:
+        users = db.get_tracked_users()  # [(tg_id, lc_username, tg_username)]
+        for tg_id, lc_user, tg_un in users:
+            tg_un = tg_un or ""
             try:
                 # get last processed AC timestamp
                 cutoff = db.get_or_set_last_seen(lc_user) or 0
@@ -73,14 +74,14 @@ async def poll_loop():
                             # format message
                             try:
                                 member = await bot.get_chat_member(chat_id, tg_id)
+                                uname = member.user.username
+                                name = f"@{uname}" if uname else (member.user.full_name or "A member")
                             except Exception as e:
                                 print(
                                     f"[Error] get_chat_member failed chat_id={chat_id} "
-                                    f"tg_id={tg_id} lc_username={lc_user} exc={e}"
+                                    f"tg_id={tg_id} lc_username={lc_user} tg_username={tg_un} exc={e}"
                                 )
-                                continue
-                            uname = member.user.username
-                            name = f"@{uname}" if uname else (member.user.full_name or "A member")
+                                name = f"@{tg_un}" if tg_un else "A member"
                             msg = f"🎉 {name} solved <b>{title}</b> (<i>{diff}</i>).\nWeekly score: <b>{total}</b>  — E:{counts.get('Easy',0)} M:{counts.get('Medium',0)} H:{counts.get('Hard',0)}"
                             try:
                                 await bot.send_message(chat_id, msg, parse_mode="HTML", disable_web_page_preview=True)
@@ -120,17 +121,30 @@ async def leaderboard(m: types.Message):
         return await m.reply("No solves yet this week.")
     lines = [f"🏆 <b>This week's leaderboard</b>\nPoint allocation: (E={e}, M={mw}, H={h})\n"]
     rank = 1
+    failed_unames = []
     for uid, total, cts in scored[:10]:
+        with db.conn() as c:
+            row = c.execute(
+                "SELECT tg_username FROM users WHERE telegram_user_id=?",
+                (uid,),
+            ).fetchone()
+        tg_un = row[0] if row and row[0] else ""
         try:
             member = await bot.get_chat_member(chat_id, uid)
             name = f"@{member.user.username}" if member.user.username else (member.user.full_name or str(uid))
         except Exception as e:
             print(
-                f"[Error] get_chat_member failed chat_id={chat_id} tg_id={uid} exc={e}"
+                f"[Error] get_chat_member failed chat_id={chat_id} tg_id={uid} tg_username={tg_un} exc={e}"
             )
-            name = str(uid)
+            name = f"@{tg_un}" if tg_un else str(uid)
+            if tg_un:
+                failed_unames.append(f"@{tg_un}")
         lines.append(f"{rank}. {name} — <b>{total}</b> (E:{cts['Easy']} M:{cts['Medium']} H:{cts['Hard']})")
         rank += 1
+    if failed_unames:
+        lines.append(
+            "Debug: " + ", ".join(failed_unames) + ", please use /relink <leetcode_username>"
+        )
     await m.reply("\n".join(lines), parse_mode="HTML")
 
 @dp.message(Command("stats"))
