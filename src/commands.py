@@ -4,6 +4,21 @@ import time, sqlite3
 from . import db
 
 router = Router()
+START_TS = int(time.time())
+
+def _format_uptime(seconds: int) -> str:
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins, secs = divmod(rem, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or days:
+        parts.append(f"{hours}h")
+    if mins or hours or days:
+        parts.append(f"{mins}m")
+    parts.append(f"{secs}s")
+    return " ".join(parts)
 
 @router.message(Command("start"))
 async def start(m: types.Message):
@@ -11,7 +26,11 @@ async def start(m: types.Message):
 
 @router.message(Command("help"))
 async def help(m: types.Message):
-    await m.answer("Hello! Link your LeetCode with /link <leetcode_username>. Then, in each group, use /join to begin showing your progress and enter the leaderboard.")
+    uptime = _format_uptime(int(time.time()) - START_TS)
+    await m.answer(
+        "Hello! Link your LeetCode with /link <leetcode_username>. Then, in each group, use /join to begin showing your progress and enter the leaderboard.\n"
+        f"Uptime: {uptime}"
+    )
 
 @router.message(Command("link"))
 async def link(m: types.Message):
