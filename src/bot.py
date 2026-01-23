@@ -186,18 +186,51 @@ if __name__ == "__main__":
 
 @dp.message(Command("debug_me"))
 async def debug_me(m: types.Message):
-    tg_id = m.from_user.id
-    with db.conn() as c:
-        row = c.execute("SELECT tg_username, lc_username FROM users WHERE telegram_user_id=?", (tg_id,)).fetchone()
-    if not row:
-        return await m.reply("No mapping found. Link first with /link <leetcode_username>.")
-    tg_un, lc = row
+    parts = (m.text or "").split()
+    lcname = parts[1].strip() if len(parts) == 2 else None
+
+    current_tg_id = m.from_user.id
+    current_tg_un = m.from_user.username or ""
+
+    if lcname:
+        with db.conn() as c:
+            row = c.execute(
+                "SELECT telegram_user_id, tg_username, lc_username FROM users WHERE lc_username=?",
+                (lcname,),
+            ).fetchone()
+        if not row:
+            return await m.reply(f"No Telegram user linked to LC '{lcname}'.")
+        stored_tg_id, stored_tg_un, lc = row
+    else:
+        with db.conn() as c:
+            row = c.execute(
+                "SELECT telegram_user_id, tg_username, lc_username FROM users WHERE telegram_user_id=?",
+                (current_tg_id,),
+            ).fetchone()
+        if not row:
+            return await m.reply("No mapping found. Link first with /link <leetcode_username>.")
+        stored_tg_id, stored_tg_un, lc = row
+
     # last_seen
     with db.conn() as c:
         seen = c.execute("SELECT last_seen_ts FROM last_seen WHERE lc_username=?", (lc,)).fetchone()
     ls = seen[0] if seen else 0
     ls_h = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(ls)) if ls else "0"
-    await m.reply(f"TG ID: {tg_id}\nTG @: {tg_un or '(none)'}\nLC: {lc}\nlast_seen: {ls} ({ls_h})")
+
+    match = "YES" if stored_tg_id == current_tg_id else "NO"
+    lines = [
+        f"LC: {lc}",
+        f"Stored TG ID: {stored_tg_id}",
+        f"Stored TG @: {stored_tg_un or '(none)'}",
+        f"Current TG ID: {current_tg_id}",
+        f"Current TG @: {current_tg_un or '(none)'}",
+        f"Match: {match}",
+        f"last_seen: {ls} ({ls_h})",
+    ]
+    if match == "NO":
+        lines.append(f"Suggestion: Use /relink {lc} from the correct account.")
+
+    await m.reply("\n".join(lines))
 
 @dp.message(Command("debug_recent"))
 async def debug_recent(m: types.Message):
@@ -236,3 +269,51 @@ async def debug_recent(m: types.Message):
         shown += 1
         if shown >= 12: break
     await m.reply("Recent ACs (newest first):\n" + "\n".join(lines[:30]))
+
+@dp.message(Command("debug_lc"))
+async def debug_lc(m: types.Message):
+    # Usage: /debug_lc <leetcode_username>
+    parts = (m.text or "").split()
+    if len(parts) != 2:
+        return await m.reply("Usage: /debug_lc <leetcode_username>")
+    lcname = parts[1].strip()
+
+    with db.conn() as c:
+        row = c.execute(
+            "SELECT telegram_user_id, tg_username FROM users WHERE lc_username=?",
+            (lcname,),
+        ).fetchone()
+    if not row:
+        return await m.reply(f"No Telegram user linked to LC '{lcname}'.")
+    tg_id, tg_un = row
+
+    # last_seen
+    with db.conn() as c:
+        seen = c.execute(
+            "SELECT last_seen_ts FROM last_seen WHERE lc_username=?",
+            (lcname,),
+        ).fetchone()
+    ls = seen[0] if seen else 0
+    ls_h = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(ls)) if ls else "0"
+
+    chat_id = m.chat.id
+    chat_type = m.chat.type
+    try:
+        await bot.get_chat_member(chat_id, tg_id)
+        gm_status = "OK"
+        gm_error = ""
+    except Exception as e:
+        gm_status = "FAILED"
+        gm_error = f"{e}"
+
+    lines = [
+        f"LC: {lcname}",
+        f"TG ID: {tg_id}",
+        f"TG @: {tg_un or '(none)'}",
+        f"last_seen: {ls} ({ls_h})",
+        f"get_chat_member: {gm_status} (chat_id={chat_id}, chat_type={chat_type})",
+    ]
+    if gm_error:
+        lines.append(f"get_chat_member error: {gm_error}")
+
+    await m.reply("\n".join(lines))
