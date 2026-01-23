@@ -168,7 +168,7 @@ async def leaderboard(m: types.Message):
         rank += 1
     if failed_unames:
         lines.append(
-            "Debug: " + ", ".join(failed_unames) + ", please use /relink <leetcode_username>"
+            "Debug: " + ", ".join(failed_unames) + ", please use /relink leetcode_username"
         )
     try:
         await m.reply("\n".join(lines), parse_mode="HTML")
@@ -238,7 +238,7 @@ async def debug_me(m: types.Message):
                 (current_tg_id,),
             ).fetchone()
         if not row:
-            return await m.reply("No mapping found. Link first with /link <leetcode_username>.")
+            return await m.reply("No mapping found. Link first with /link leetcode_username.")
         stored_tg_id, stored_tg_un, lc = row
 
     # last_seen
@@ -272,7 +272,7 @@ async def debug_recent(m: types.Message):
         with db.conn() as c:
             r = c.execute("SELECT lc_username FROM users WHERE telegram_user_id=?", (m.from_user.id,)).fetchone()
             if not r:
-                return await m.reply("Link first with /link <leetcode_username> or pass a username: /debug_recent foo")
+                return await m.reply("Link first with /link leetcode_username or pass a username: /debug_recent foo")
             lcname = r[0]
 
     # find the TG user mapped to this LC (for duplicate checks)
@@ -302,10 +302,10 @@ async def debug_recent(m: types.Message):
 
 @dp.message(Command("debug_lc"))
 async def debug_lc(m: types.Message):
-    # Usage: /debug_lc <leetcode_username>
+    # Usage: /debug_lc leetcode_username
     parts = (m.text or "").split()
     if len(parts) != 2:
-        return await m.reply("Usage: /debug_lc <leetcode_username>")
+        return await m.reply("Usage: /debug_lc leetcode_username")
     lcname = parts[1].strip()
 
     with db.conn() as c:
