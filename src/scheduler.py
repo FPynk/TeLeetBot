@@ -66,7 +66,7 @@ async def weekly_leaderboards():
             rank += 1
         if failed_unames:
             lines.append(
-                "Debug: " + ", ".join(failed_unames) + ", please use /relink <leetcode_username>"
+                "Debug: " + ", ".join(failed_unames) + ", please use /relink leetcode_username"
             )
         try:
             await bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")

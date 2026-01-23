@@ -22,13 +22,13 @@ def _format_uptime(seconds: int) -> str:
 
 @router.message(Command("start"))
 async def start(m: types.Message):
-    await m.answer("Hi! Link your LeetCode with /link <leetcode_username>. In groups, use /join to enter the leaderboard.")
+    await m.answer("Hi! Link your LeetCode with /link leetcode_username. In groups, use /join to enter the leaderboard.")
 
 @router.message(Command("help"))
 async def help(m: types.Message):
     uptime = _format_uptime(int(time.time()) - START_TS)
     await m.answer(
-        "Hello! Link your LeetCode with /link <leetcode_username>. Then, in each group, use /join to begin showing your progress and enter the leaderboard.\n"
+        "Hello! Link your LeetCode with /link leetcode_username. Then, in each group, use /join to begin showing your progress and enter the leaderboard.\n"
         f"Uptime: {uptime}"
     )
 
@@ -36,7 +36,7 @@ async def help(m: types.Message):
 async def link(m: types.Message):
     parts = (m.text or "").split()
     if len(parts) != 2:
-        return await m.reply("Usage: /link <leetcode_username>")
+        return await m.reply("Usage: /link leetcode_username")
 
     lc = parts[1].strip()
     tg_id = m.from_user.id
@@ -78,7 +78,7 @@ async def unlink(m: types.Message):
 async def relink(m: types.Message):
     parts = (m.text or "").split()
     if len(parts) != 2:
-        return await m.reply("Usage: /relink <leetcode_username>")
+        return await m.reply("Usage: /relink leetcode_username")
 
     lc = parts[1].strip()
     tg_id = m.from_user.id
@@ -93,7 +93,7 @@ async def relink(m: types.Message):
         ).fetchone()
         if not row:
             # LC username isn't linked yet.
-            msg = "That LeetCode username isn't linked yet. Use /link <leetcode_username> first."
+            msg = "That LeetCode username isn't linked yet. Use /link leetcode_username first."
         else:
             old_tg_id = row[0]
             if old_tg_id == tg_id:
