@@ -5,6 +5,9 @@ services:
     container_name: te-leet-bot
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - DISCORD_APP_ID=${DISCORD_APP_ID}
+      - DISCORD_DEV_GUILD_ID=${DISCORD_DEV_GUILD_ID}
       - TZ=America/Chicago
     # bind mount host paths left to container paths right
     volumes:

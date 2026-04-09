@@ -1,5 +1,5 @@
 # TeLeetBot
-Telegram bot to track leetcode progress for groups of people
+Telegram and Discord bots to track LeetCode progress for groups of people
 
 # Bot Commands
 ## Core
@@ -70,6 +70,13 @@ python -m src.main   # quick smoke test; Ctrl+C to stop
 
 For powershell
 `.\.venv\Scripts\Activate.ps1`
+
+Discord setup notes:
+
+- Add `DISCORD_BOT_TOKEN` and `DISCORD_APP_ID` to `.env`
+- Optional: add `DISCORD_DEV_GUILD_ID` for faster guild-scoped slash command sync during development
+- Invite the Discord bot with the `bot` and `applications.commands` scopes
+- Grant it `View Channels` and `Send Messages`
 
 Todo:
 - Improve functionality

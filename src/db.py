@@ -1,28 +1,73 @@
-import sqlite3, time
+import sqlite3
+import time
 from contextlib import contextmanager
 from typing import Optional
 
+
 @contextmanager
-def conn(db_path="bot.db"):
+def conn(db_path: str = "bot.db"):
     c = sqlite3.connect(db_path)
+    c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL;")
     c.execute("PRAGMA foreign_keys=ON;")
+    c.execute("PRAGMA busy_timeout=5000;")
     try:
         yield c
         c.commit()
     finally:
         c.close()
 
-def init():
-    with conn() as c:
-        c.executescript("""
-        PRAGMA foreign_keys=ON;
 
+def init(db_path: str = "bot.db"):
+    with conn(db_path) as c:
+        if _needs_legacy_migration(c):
+            _migrate_telegram_primary_schema(c)
+        _create_current_schema(c)
+        _ensure_indexes(c)
+
+
+def _table_exists(c: sqlite3.Connection, table: str) -> bool:
+    row = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _table_columns(c: sqlite3.Connection, table: str) -> set[str]:
+    if not _table_exists(c, table):
+        return set()
+    return {row["name"] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _needs_legacy_migration(c: sqlite3.Connection) -> bool:
+    cols = _table_columns(c, "users")
+    if not cols:
+        return False
+    return "telegram_user_id" in cols
+
+
+def _create_current_schema(c: sqlite3.Connection):
+    c.executescript(
+        """
         CREATE TABLE IF NOT EXISTS users (
+          id         INTEGER PRIMARY KEY,
+          lc_username TEXT UNIQUE NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS telegram_links (
           telegram_user_id INTEGER PRIMARY KEY,
+          user_id          INTEGER UNIQUE NOT NULL,
           tg_username      TEXT,
-          lc_username      TEXT UNIQUE NOT NULL,
-          created_at       INTEGER NOT NULL
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS discord_links (
+          discord_user_id   TEXT PRIMARY KEY,
+          user_id           INTEGER UNIQUE NOT NULL,
+          discord_username  TEXT,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS chats (
@@ -34,11 +79,28 @@ def init():
         );
 
         CREATE TABLE IF NOT EXISTS memberships (
-          chat_id           INTEGER NOT NULL,
-          telegram_user_id  INTEGER NOT NULL,
-          PRIMARY KEY (chat_id, telegram_user_id),
+          chat_id  INTEGER NOT NULL,
+          user_id  INTEGER NOT NULL,
+          PRIMARY KEY (chat_id, user_id),
           FOREIGN KEY (chat_id) REFERENCES chats(chat_id) ON DELETE CASCADE,
-          FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS discord_channels (
+          guild_id       TEXT NOT NULL,
+          channel_id     TEXT NOT NULL,
+          post_on_solve  INTEGER NOT NULL DEFAULT 1,
+          scoring        TEXT NOT NULL DEFAULT '1,2,5',
+          PRIMARY KEY (guild_id, channel_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS discord_channel_memberships (
+          guild_id   TEXT NOT NULL,
+          channel_id TEXT NOT NULL,
+          user_id    INTEGER NOT NULL,
+          PRIMARY KEY (guild_id, channel_id, user_id),
+          FOREIGN KEY (guild_id, channel_id) REFERENCES discord_channels(guild_id, channel_id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS problems (
@@ -48,67 +110,106 @@ def init():
         );
 
         CREATE TABLE IF NOT EXISTS completions (
-          id               INTEGER PRIMARY KEY AUTOINCREMENT,
-          telegram_user_id INTEGER NOT NULL,
-          slug             TEXT NOT NULL,
-          solved_at_utc    INTEGER NOT NULL,
-          is_deleted       INTEGER NOT NULL DEFAULT 0,
-          FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE,
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id       INTEGER NOT NULL,
+          slug          TEXT NOT NULL,
+          solved_at_utc INTEGER NOT NULL,
+          is_deleted    INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
           FOREIGN KEY (slug) REFERENCES problems(slug) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS last_seen (
-          lc_username TEXT PRIMARY KEY,
-          last_seen_ts INTEGER NOT NULL
+          lc_username   TEXT PRIMARY KEY,
+          last_seen_ts  INTEGER NOT NULL
         );
-        """)
-        _migrate_completions(c)
+        """
+    )
 
-def _migrate_completions(c: sqlite3.Connection):
-    row = c.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='completions'"
-    ).fetchone()
-    table_sql = row[0] if row else ""
-    normalized_sql = (table_sql or "").replace(" ", "").replace("\n", "").lower()
-    has_old_unique = "unique(telegram_user_id,slug)" in normalized_sql
-    columns = {r[1] for r in c.execute("PRAGMA table_info(completions)").fetchall()}
-    has_is_deleted = "is_deleted" in columns
 
-    if has_old_unique:
-        _rebuild_completions_table(c)
-    else:
-        if table_sql and not has_is_deleted:
-            c.execute(
-                "ALTER TABLE completions ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0"
-            )
-        _ensure_completions_indexes(c)
+def _migrate_telegram_primary_schema(c: sqlite3.Connection):
+    completion_cols = _table_columns(c, "completions")
+    has_is_deleted = "is_deleted" in completion_cols
 
-def _rebuild_completions_table(c: sqlite3.Connection):
     c.execute("PRAGMA foreign_keys=OFF;")
     try:
         c.execute("BEGIN IMMEDIATE;")
-        c.execute(
+        c.executescript(
             """
+            CREATE TABLE users_new (
+              id          INTEGER PRIMARY KEY,
+              lc_username TEXT UNIQUE NOT NULL,
+              created_at  INTEGER NOT NULL
+            );
+
+            CREATE TABLE telegram_links_new (
+              telegram_user_id INTEGER PRIMARY KEY,
+              user_id          INTEGER UNIQUE NOT NULL,
+              tg_username      TEXT,
+              FOREIGN KEY (user_id) REFERENCES users_new(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE memberships_new (
+              chat_id  INTEGER NOT NULL,
+              user_id  INTEGER NOT NULL,
+              PRIMARY KEY (chat_id, user_id),
+              FOREIGN KEY (chat_id) REFERENCES chats(chat_id) ON DELETE CASCADE,
+              FOREIGN KEY (user_id) REFERENCES users_new(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE completions_new (
-              id               INTEGER PRIMARY KEY AUTOINCREMENT,
-              telegram_user_id INTEGER NOT NULL,
-              slug             TEXT NOT NULL,
-              solved_at_utc    INTEGER NOT NULL,
-              is_deleted       INTEGER NOT NULL DEFAULT 0,
-              FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE,
+              id            INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id       INTEGER NOT NULL,
+              slug          TEXT NOT NULL,
+              solved_at_utc INTEGER NOT NULL,
+              is_deleted    INTEGER NOT NULL DEFAULT 0,
+              FOREIGN KEY (user_id) REFERENCES users_new(id) ON DELETE CASCADE,
               FOREIGN KEY (slug) REFERENCES problems(slug) ON DELETE CASCADE
             );
             """
         )
+
         c.execute(
             """
-            INSERT INTO completions_new(id, telegram_user_id, slug, solved_at_utc, is_deleted)
-            SELECT id, telegram_user_id, slug, solved_at_utc, 0 FROM completions;
+            INSERT INTO users_new(id, lc_username, created_at)
+            SELECT telegram_user_id, lc_username, created_at FROM users
             """
         )
-        c.execute("DROP TABLE completions;")
-        c.execute("ALTER TABLE completions_new RENAME TO completions;")
-        _ensure_completions_indexes(c)
+        c.execute(
+            """
+            INSERT INTO telegram_links_new(telegram_user_id, user_id, tg_username)
+            SELECT telegram_user_id, telegram_user_id, tg_username FROM users
+            """
+        )
+        c.execute(
+            """
+            INSERT INTO memberships_new(chat_id, user_id)
+            SELECT chat_id, telegram_user_id FROM memberships
+            """
+        )
+
+        if has_is_deleted:
+            c.execute(
+                """
+                INSERT INTO completions_new(id, user_id, slug, solved_at_utc, is_deleted)
+                SELECT id, telegram_user_id, slug, solved_at_utc, is_deleted FROM completions
+                """
+            )
+        else:
+            c.execute(
+                """
+                INSERT INTO completions_new(id, user_id, slug, solved_at_utc, is_deleted)
+                SELECT id, telegram_user_id, slug, solved_at_utc, 0 FROM completions
+                """
+            )
+
+        c.execute("DROP TABLE memberships")
+        c.execute("DROP TABLE completions")
+        c.execute("DROP TABLE users")
+        c.execute("ALTER TABLE users_new RENAME TO users")
+        c.execute("ALTER TABLE telegram_links_new RENAME TO telegram_links")
+        c.execute("ALTER TABLE memberships_new RENAME TO memberships")
+        c.execute("ALTER TABLE completions_new RENAME TO completions")
         c.execute("COMMIT;")
     except Exception:
         c.execute("ROLLBACK;")
@@ -116,132 +217,794 @@ def _rebuild_completions_table(c: sqlite3.Connection):
     finally:
         c.execute("PRAGMA foreign_keys=ON;")
 
-def _ensure_completions_indexes(c: sqlite3.Connection):
+
+def _ensure_indexes(c: sqlite3.Connection):
     c.execute(
-        "CREATE INDEX IF NOT EXISTS idx_completions_user_time ON completions(telegram_user_id, solved_at_utc)"
+        "CREATE INDEX IF NOT EXISTS idx_memberships_user ON memberships(user_id)"
     )
     c.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS ux_compl_user_slug_active ON completions(telegram_user_id, slug) WHERE is_deleted=0"
+        "CREATE INDEX IF NOT EXISTS idx_discord_channel_memberships_user ON discord_channel_memberships(user_id)"
     )
     c.execute(
-        "CREATE INDEX IF NOT EXISTS idx_compl_user_slug_deleted ON completions(telegram_user_id, slug, is_deleted)"
+        "CREATE INDEX IF NOT EXISTS idx_completions_user_time ON completions(user_id, solved_at_utc)"
+    )
+    c.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_compl_user_slug_active ON completions(user_id, slug) WHERE is_deleted=0"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_compl_user_slug_deleted ON completions(user_id, slug, is_deleted)"
     )
 
-def upsert_user(telegram_user_id:int, tg_username:str, lc_username:str):
-    now=int(time.time())
-    with conn() as c:
-        c.execute("""
-          INSERT INTO users(telegram_user_id,tg_username,lc_username,created_at)
-          VALUES(?,?,?,?)
-          ON CONFLICT(telegram_user_id) DO UPDATE SET
-            tg_username=excluded.tg_username,
-            lc_username=excluded.lc_username
-        """,(telegram_user_id,tg_username,lc_username,now))
 
-def set_chat(chat_id:int, title:str, tz:str=None, post_on_solve:int=None, scoring:str=None):
+def get_or_create_user(lc_username: str) -> int:
+    now = int(time.time())
     with conn() as c:
-        # upsert with defaults
-        c.execute("""
-          INSERT INTO chats(chat_id,title) VALUES(?,?)
-          ON CONFLICT(chat_id) DO UPDATE SET title=excluded.title
-        """,(chat_id,title))
-        if tz:
-            c.execute("UPDATE chats SET tz=? WHERE chat_id=?", (tz,chat_id))
-        if post_on_solve is not None:
-            c.execute("UPDATE chats SET post_on_solve=? WHERE chat_id=?", (post_on_solve,chat_id))
-        if scoring:
-            c.execute("UPDATE chats SET scoring=? WHERE chat_id=?", (scoring,chat_id))
+        row = c.execute(
+            "SELECT id FROM users WHERE lc_username=?",
+            (lc_username,),
+        ).fetchone()
+        if row:
+            return row["id"]
+        cur = c.execute(
+            "INSERT INTO users(lc_username, created_at) VALUES(?, ?)",
+            (lc_username, now),
+        )
+        return cur.lastrowid
 
-def join_chat(chat_id:int, telegram_user_id:int):
-    with conn() as c:
-        c.execute("INSERT OR IGNORE INTO memberships(chat_id,telegram_user_id) VALUES(?,?)",(chat_id,telegram_user_id))
 
-def leave_chat(chat_id:int, telegram_user_id:int):
+def get_user_by_id(user_id: int):
     with conn() as c:
-        c.execute("DELETE FROM memberships WHERE chat_id=? AND telegram_user_id=?",(chat_id,telegram_user_id))
+        return c.execute(
+            "SELECT id, lc_username, created_at FROM users WHERE id=?",
+            (user_id,),
+        ).fetchone()
+
+
+def get_user_by_lc(lc_username: str):
+    with conn() as c:
+        return c.execute(
+            "SELECT id, lc_username, created_at FROM users WHERE lc_username=?",
+            (lc_username,),
+        ).fetchone()
+
+
+def get_user_by_telegram_id(telegram_user_id: int):
+    with conn() as c:
+        return c.execute(
+            """
+            SELECT u.id AS user_id, u.lc_username, tl.telegram_user_id, tl.tg_username
+            FROM telegram_links tl
+            JOIN users u ON u.id = tl.user_id
+            WHERE tl.telegram_user_id=?
+            """,
+            (telegram_user_id,),
+        ).fetchone()
+
+
+def get_user_by_discord_id(discord_user_id: str):
+    with conn() as c:
+        return c.execute(
+            """
+            SELECT u.id AS user_id, u.lc_username, dl.discord_user_id, dl.discord_username
+            FROM discord_links dl
+            JOIN users u ON u.id = dl.user_id
+            WHERE dl.discord_user_id=?
+            """,
+            (discord_user_id,),
+        ).fetchone()
+
+
+def get_telegram_link_for_user(user_id: int):
+    with conn() as c:
+        return c.execute(
+            """
+            SELECT telegram_user_id, tg_username
+            FROM telegram_links
+            WHERE user_id=?
+            """,
+            (user_id,),
+        ).fetchone()
+
+
+def get_discord_link_for_user(user_id: int):
+    with conn() as c:
+        return c.execute(
+            """
+            SELECT discord_user_id, discord_username
+            FROM discord_links
+            WHERE user_id=?
+            """,
+            (user_id,),
+        ).fetchone()
+
 
 def get_tracked_users():
     with conn() as c:
         return c.execute(
-            "SELECT telegram_user_id, lc_username, tg_username FROM users"
+            "SELECT id AS user_id, lc_username FROM users ORDER BY id"
         ).fetchall()
 
-def get_user_chats(telegram_user_id:int):
+
+def ensure_last_seen(lc_username: str, ts: int):
     with conn() as c:
-        return c.execute("""
-          SELECT c.chat_id, c.post_on_solve, c.scoring FROM memberships m
-          JOIN chats c ON c.chat_id=m.chat_id
-          WHERE m.telegram_user_id=?
-        """,(telegram_user_id,)).fetchall()
+        row = c.execute(
+            "SELECT 1 FROM last_seen WHERE lc_username=?",
+            (lc_username,),
+        ).fetchone()
+        if row is None:
+            c.execute(
+                "INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)",
+                (lc_username, ts),
+            )
+
 
 def get_or_set_last_seen(lc_username: str, ts: Optional[int] = None):
     with conn() as c:
         if ts is None:
-            # retrieve last_seen_ts timestamp
             row = c.execute(
                 "SELECT last_seen_ts FROM last_seen WHERE lc_username=?",
                 (lc_username,),
             ).fetchone()
-            return row[0] if row else 0
+            return row["last_seen_ts"] if row else 0
+
+        row = c.execute(
+            "SELECT 1 FROM last_seen WHERE lc_username=?",
+            (lc_username,),
+        ).fetchone()
+        if row:
+            c.execute(
+                "UPDATE last_seen SET last_seen_ts=? WHERE lc_username=?",
+                (ts, lc_username),
+            )
         else:
-            # grab row
+            c.execute(
+                "INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)",
+                (lc_username, ts),
+            )
+        return ts
+
+
+def link_telegram_account(telegram_user_id: int, tg_username: str, lc_username: str):
+    now = int(time.time())
+    with conn() as c:
+        current = c.execute(
+            """
+            SELECT u.id AS user_id, u.lc_username
+            FROM telegram_links tl
+            JOIN users u ON u.id = tl.user_id
+            WHERE tl.telegram_user_id=?
+            """,
+            (telegram_user_id,),
+        ).fetchone()
+        if current and current["lc_username"] != lc_username:
+            return False, (
+                f"Your Telegram is already linked to LeetCode '{current['lc_username']}'. "
+                "Use /unlink first, then /link leetcode_username."
+            )
+
+        target = c.execute(
+            """
+            SELECT u.id AS user_id, u.lc_username, tl.telegram_user_id AS linked_tg_id
+            FROM users u
+            LEFT JOIN telegram_links tl ON tl.user_id = u.id
+            WHERE u.lc_username=?
+            """,
+            (lc_username,),
+        ).fetchone()
+
+        if target and target["linked_tg_id"] and target["linked_tg_id"] != telegram_user_id:
+            return False, (
+                "That LeetCode username is already linked by another Telegram user. "
+                "Ask them to /unlink first or use a different LeetCode account."
+            )
+
+        if target is None:
+            cur = c.execute(
+                "INSERT INTO users(lc_username, created_at) VALUES(?, ?)",
+                (lc_username, now),
+            )
+            user_id = cur.lastrowid
+            c.execute(
+                "INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)",
+                (lc_username, now),
+            )
+        else:
+            user_id = target["user_id"]
             row = c.execute(
                 "SELECT 1 FROM last_seen WHERE lc_username=?",
                 (lc_username,),
             ).fetchone()
-            # update or insert
-            if row:
+            if row is None:
                 c.execute(
-                    "UPDATE last_seen SET last_seen_ts=? WHERE lc_username=?",
-                    (ts, lc_username),
+                    "INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)",
+                    (lc_username, now),
                 )
-            else:
+
+        if current is None:
+            c.execute(
+                """
+                INSERT INTO telegram_links(telegram_user_id, user_id, tg_username)
+                VALUES(?, ?, ?)
+                """,
+                (telegram_user_id, user_id, tg_username),
+            )
+        else:
+            c.execute(
+                "UPDATE telegram_links SET tg_username=? WHERE telegram_user_id=?",
+                (tg_username, telegram_user_id),
+            )
+
+        return True, (
+            f"Linked to LeetCode: {lc_username}. "
+            "Please use /join now. I'll track first-time ACs and post to groups you join."
+        )
+
+
+def relink_telegram_account(telegram_user_id: int, tg_username: str, lc_username: str):
+    with conn() as c:
+        target = c.execute(
+            """
+            SELECT u.id AS user_id, tl.telegram_user_id AS linked_tg_id
+            FROM users u
+            LEFT JOIN telegram_links tl ON tl.user_id = u.id
+            WHERE u.lc_username=?
+            """,
+            (lc_username,),
+        ).fetchone()
+        if not target:
+            return False, (
+                "That LeetCode username isn't linked yet. Use /link leetcode_username first."
+            )
+
+        current = c.execute(
+            """
+            SELECT user_id
+            FROM telegram_links
+            WHERE telegram_user_id=?
+            """,
+            (telegram_user_id,),
+        ).fetchone()
+        if current and current["user_id"] != target["user_id"]:
+            other = c.execute(
+                "SELECT lc_username FROM users WHERE id=?",
+                (current["user_id"],),
+            ).fetchone()
+            return False, (
+                f"Your Telegram is already linked to LeetCode '{other['lc_username']}'. "
+                f"Use /unlink first, then /relink {lc_username}."
+            )
+
+        linked_tg_id = target["linked_tg_id"]
+        if linked_tg_id == telegram_user_id:
+            c.execute(
+                "UPDATE telegram_links SET tg_username=? WHERE telegram_user_id=?",
+                (tg_username, telegram_user_id),
+            )
+            return True, f"You're already linked to {lc_username}. I refreshed your Telegram username."
+
+        if linked_tg_id is not None:
+            c.execute(
+                "DELETE FROM telegram_links WHERE telegram_user_id=?",
+                (linked_tg_id,),
+            )
+
+        c.execute(
+            """
+            INSERT INTO telegram_links(telegram_user_id, user_id, tg_username)
+            VALUES(?, ?, ?)
+            """,
+            (telegram_user_id, target["user_id"], tg_username),
+        )
+        return True, (
+            f"Relinked {lc_username} to your Telegram account. "
+            "If you were in groups, you're still on their leaderboards."
+        )
+
+
+def unlink_telegram_account(telegram_user_id: int):
+    with conn() as c:
+        link = c.execute(
+            """
+            SELECT tl.user_id, u.lc_username
+            FROM telegram_links tl
+            JOIN users u ON u.id = tl.user_id
+            WHERE tl.telegram_user_id=?
+            """,
+            (telegram_user_id,),
+        ).fetchone()
+        if not link:
+            return False, "You don't have a linked LeetCode account."
+
+        user_id = link["user_id"]
+        lc_username = link["lc_username"]
+        c.execute("DELETE FROM memberships WHERE user_id=?", (user_id,))
+        c.execute("DELETE FROM telegram_links WHERE telegram_user_id=?", (telegram_user_id,))
+
+        if not _user_has_any_links(c, user_id):
+            c.execute("DELETE FROM last_seen WHERE lc_username=?", (lc_username,))
+            c.execute("DELETE FROM users WHERE id=?", (user_id,))
+
+        return True, "Unlinked. You can /link another LeetCode username anytime."
+
+
+def link_discord_account(discord_user_id: str, discord_username: str, lc_username: str):
+    now = int(time.time())
+    with conn() as c:
+        current = c.execute(
+            """
+            SELECT u.id AS user_id, u.lc_username
+            FROM discord_links dl
+            JOIN users u ON u.id = dl.user_id
+            WHERE dl.discord_user_id=?
+            """,
+            (discord_user_id,),
+        ).fetchone()
+        if current and current["lc_username"] != lc_username:
+            return False, (
+                f"Your Discord is already linked to LeetCode '{current['lc_username']}'. "
+                "Use /unlink first, then /link."
+            )
+
+        target = c.execute(
+            """
+            SELECT u.id AS user_id, dl.discord_user_id AS linked_discord_id
+            FROM users u
+            LEFT JOIN discord_links dl ON dl.user_id = u.id
+            WHERE u.lc_username=?
+            """,
+            (lc_username,),
+        ).fetchone()
+        if target and target["linked_discord_id"] and target["linked_discord_id"] != discord_user_id:
+            return False, "That LeetCode username is already linked by another Discord user."
+
+        if target is None:
+            cur = c.execute(
+                "INSERT INTO users(lc_username, created_at) VALUES(?, ?)",
+                (lc_username, now),
+            )
+            user_id = cur.lastrowid
+            c.execute(
+                "INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)",
+                (lc_username, now),
+            )
+        else:
+            user_id = target["user_id"]
+            row = c.execute(
+                "SELECT 1 FROM last_seen WHERE lc_username=?",
+                (lc_username,),
+            ).fetchone()
+            if row is None:
                 c.execute(
-                    "INSERT INTO last_seen(lc_username,last_seen_ts) VALUES(?,?)",
-                    (lc_username, ts),
+                    "INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)",
+                    (lc_username, now),
                 )
-            return ts
 
-def upsert_problem(slug:str, title:str, difficulty:str):
-    with conn() as c:
-        c.execute("INSERT OR IGNORE INTO problems(slug,title,difficulty) VALUES(?,?,?)", (slug,title,difficulty))
+        if current is None:
+            c.execute(
+                """
+                INSERT INTO discord_links(discord_user_id, user_id, discord_username)
+                VALUES(?, ?, ?)
+                """,
+                (discord_user_id, user_id, discord_username),
+            )
+        else:
+            c.execute(
+                "UPDATE discord_links SET discord_username=? WHERE discord_user_id=?",
+                (discord_username, discord_user_id),
+            )
 
-def insert_completion(telegram_user_id:int, slug:str, solved_at_utc:int) -> bool:
-    THIRTY_DAYS = 30 * 86400
+        return True, f"Linked to LeetCode: {lc_username}. Use /join in a channel to enter that leaderboard."
+
+
+def relink_discord_account(discord_user_id: str, discord_username: str, lc_username: str):
     with conn() as c:
-        row = c.execute("""
-            SELECT id, solved_at_utc FROM completions
-            WHERE telegram_user_id=? AND slug=? AND is_deleted=0
-        """, (telegram_user_id, slug)).fetchone()
+        target = c.execute(
+            """
+            SELECT u.id AS user_id, dl.discord_user_id AS linked_discord_id
+            FROM users u
+            LEFT JOIN discord_links dl ON dl.user_id = u.id
+            WHERE u.lc_username=?
+            """,
+            (lc_username,),
+        ).fetchone()
+        if not target:
+            return False, "That LeetCode username isn't linked yet. Use /link first."
+
+        current = c.execute(
+            """
+            SELECT user_id
+            FROM discord_links
+            WHERE discord_user_id=?
+            """,
+            (discord_user_id,),
+        ).fetchone()
+        if current and current["user_id"] != target["user_id"]:
+            other = c.execute(
+                "SELECT lc_username FROM users WHERE id=?",
+                (current["user_id"],),
+            ).fetchone()
+            return False, (
+                f"Your Discord is already linked to LeetCode '{other['lc_username']}'. "
+                f"Use /unlink first, then /relink {lc_username}."
+            )
+
+        linked_discord_id = target["linked_discord_id"]
+        if linked_discord_id == discord_user_id:
+            c.execute(
+                "UPDATE discord_links SET discord_username=? WHERE discord_user_id=?",
+                (discord_username, discord_user_id),
+            )
+            return True, f"You're already linked to {lc_username}. I refreshed your Discord username."
+
+        if linked_discord_id is not None:
+            c.execute(
+                "DELETE FROM discord_links WHERE discord_user_id=?",
+                (linked_discord_id,),
+            )
+
+        c.execute(
+            """
+            INSERT INTO discord_links(discord_user_id, user_id, discord_username)
+            VALUES(?, ?, ?)
+            """,
+            (discord_user_id, target["user_id"], discord_username),
+        )
+        return True, f"Relinked {lc_username} to your Discord account."
+
+
+def unlink_discord_account(discord_user_id: str):
+    with conn() as c:
+        link = c.execute(
+            """
+            SELECT dl.user_id, u.lc_username
+            FROM discord_links dl
+            JOIN users u ON u.id = dl.user_id
+            WHERE dl.discord_user_id=?
+            """,
+            (discord_user_id,),
+        ).fetchone()
+        if not link:
+            return False, "You don't have a linked LeetCode account."
+
+        user_id = link["user_id"]
+        lc_username = link["lc_username"]
+        c.execute(
+            "DELETE FROM discord_channel_memberships WHERE user_id=?",
+            (user_id,),
+        )
+        c.execute(
+            "DELETE FROM discord_links WHERE discord_user_id=?",
+            (discord_user_id,),
+        )
+
+        if not _user_has_any_links(c, user_id):
+            c.execute("DELETE FROM last_seen WHERE lc_username=?", (lc_username,))
+            c.execute("DELETE FROM users WHERE id=?", (user_id,))
+
+        return True, "Unlinked your Discord account from LeetCode."
+
+
+def _user_has_any_links(c: sqlite3.Connection, user_id: int) -> bool:
+    tg = c.execute(
+        "SELECT 1 FROM telegram_links WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    if tg:
+        return True
+    dc = c.execute(
+        "SELECT 1 FROM discord_links WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    return dc is not None
+
+
+def set_chat(chat_id: int, title: str, tz: str = None, post_on_solve: int = None, scoring: str = None):
+    with conn() as c:
+        c.execute(
+            """
+            INSERT INTO chats(chat_id, title) VALUES(?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET title=excluded.title
+            """,
+            (chat_id, title),
+        )
+        if tz:
+            c.execute("UPDATE chats SET tz=? WHERE chat_id=?", (tz, chat_id))
+        if post_on_solve is not None:
+            c.execute(
+                "UPDATE chats SET post_on_solve=? WHERE chat_id=?",
+                (post_on_solve, chat_id),
+            )
+        if scoring:
+            c.execute("UPDATE chats SET scoring=? WHERE chat_id=?", (scoring, chat_id))
+
+
+def set_discord_channel(guild_id: str, channel_id: str, post_on_solve: int = None, scoring: str = None):
+    with conn() as c:
+        c.execute(
+            """
+            INSERT INTO discord_channels(guild_id, channel_id) VALUES(?, ?)
+            ON CONFLICT(guild_id, channel_id) DO NOTHING
+            """,
+            (guild_id, channel_id),
+        )
+        if post_on_solve is not None:
+            c.execute(
+                """
+                UPDATE discord_channels
+                SET post_on_solve=?
+                WHERE guild_id=? AND channel_id=?
+                """,
+                (post_on_solve, guild_id, channel_id),
+            )
+        if scoring:
+            c.execute(
+                """
+                UPDATE discord_channels
+                SET scoring=?
+                WHERE guild_id=? AND channel_id=?
+                """,
+                (scoring, guild_id, channel_id),
+            )
+
+
+def join_chat(chat_id: int, telegram_user_id: int):
+    with conn() as c:
+        link = c.execute(
+            "SELECT user_id FROM telegram_links WHERE telegram_user_id=?",
+            (telegram_user_id,),
+        ).fetchone()
+        if not link:
+            return False
+        c.execute(
+            "INSERT OR IGNORE INTO memberships(chat_id, user_id) VALUES(?, ?)",
+            (chat_id, link["user_id"]),
+        )
+        return True
+
+
+def leave_chat(chat_id: int, telegram_user_id: int):
+    with conn() as c:
+        link = c.execute(
+            "SELECT user_id FROM telegram_links WHERE telegram_user_id=?",
+            (telegram_user_id,),
+        ).fetchone()
+        if not link:
+            return False
+        c.execute(
+            "DELETE FROM memberships WHERE chat_id=? AND user_id=?",
+            (chat_id, link["user_id"]),
+        )
+        return True
+
+
+def join_discord_channel(guild_id: str, channel_id: str, discord_user_id: str):
+    with conn() as c:
+        link = c.execute(
+            "SELECT user_id FROM discord_links WHERE discord_user_id=?",
+            (discord_user_id,),
+        ).fetchone()
+        if not link:
+            return False
+        c.execute(
+            """
+            INSERT OR IGNORE INTO discord_channel_memberships(guild_id, channel_id, user_id)
+            VALUES(?, ?, ?)
+            """,
+            (guild_id, channel_id, link["user_id"]),
+        )
+        return True
+
+
+def leave_discord_channel(guild_id: str, channel_id: str, discord_user_id: str):
+    with conn() as c:
+        link = c.execute(
+            "SELECT user_id FROM discord_links WHERE discord_user_id=?",
+            (discord_user_id,),
+        ).fetchone()
+        if not link:
+            return False
+        c.execute(
+            """
+            DELETE FROM discord_channel_memberships
+            WHERE guild_id=? AND channel_id=? AND user_id=?
+            """,
+            (guild_id, channel_id, link["user_id"]),
+        )
+        return True
+
+
+def get_user_chats(user_id: int):
+    with conn() as c:
+        return c.execute(
+            """
+            SELECT c.chat_id, c.post_on_solve, c.scoring
+            FROM memberships m
+            JOIN chats c ON c.chat_id = m.chat_id
+            WHERE m.user_id=?
+            """,
+            (user_id,),
+        ).fetchall()
+
+
+def get_user_discord_channels(user_id: int):
+    with conn() as c:
+        return c.execute(
+            """
+            SELECT dc.guild_id, dc.channel_id, dc.post_on_solve, dc.scoring
+            FROM discord_channel_memberships dcm
+            JOIN discord_channels dc
+              ON dc.guild_id = dcm.guild_id
+             AND dc.channel_id = dcm.channel_id
+            WHERE dcm.user_id=?
+            """,
+            (user_id,),
+        ).fetchall()
+
+
+def get_all_telegram_chats():
+    with conn() as c:
+        return c.execute(
+            "SELECT chat_id, scoring FROM chats ORDER BY chat_id"
+        ).fetchall()
+
+
+def get_all_discord_channels():
+    with conn() as c:
+        return c.execute(
+            """
+            SELECT guild_id, channel_id, scoring
+            FROM discord_channels
+            ORDER BY guild_id, channel_id
+            """
+        ).fetchall()
+
+
+def get_chat_scoring(chat_id: int) -> Optional[str]:
+    with conn() as c:
+        row = c.execute(
+            "SELECT scoring FROM chats WHERE chat_id=?",
+            (chat_id,),
+        ).fetchone()
+        return row["scoring"] if row else None
+
+
+def get_discord_channel_scoring(guild_id: str, channel_id: str) -> Optional[str]:
+    with conn() as c:
+        row = c.execute(
+            """
+            SELECT scoring
+            FROM discord_channels
+            WHERE guild_id=? AND channel_id=?
+            """,
+            (guild_id, channel_id),
+        ).fetchone()
+        return row["scoring"] if row else None
+
+
+def upsert_problem(slug: str, title: str, difficulty: str):
+    with conn() as c:
+        c.execute(
+            "INSERT OR IGNORE INTO problems(slug, title, difficulty) VALUES(?, ?, ?)",
+            (slug, title, difficulty),
+        )
+
+
+def get_problem(slug: str):
+    with conn() as c:
+        return c.execute(
+            "SELECT slug, title, difficulty FROM problems WHERE slug=?",
+            (slug,),
+        ).fetchone()
+
+
+def insert_completion(user_id: int, slug: str, solved_at_utc: int) -> bool:
+    thirty_days = 30 * 86400
+    with conn() as c:
+        row = c.execute(
+            """
+            SELECT id, solved_at_utc
+            FROM completions
+            WHERE user_id=? AND slug=? AND is_deleted=0
+            """,
+            (user_id, slug),
+        ).fetchone()
 
         if row is None:
-            c.execute("""
-              INSERT INTO completions(telegram_user_id,slug,solved_at_utc,is_deleted)
-              VALUES(?,?,?,0)
-            """, (telegram_user_id, slug, solved_at_utc))
+            c.execute(
+                """
+                INSERT INTO completions(user_id, slug, solved_at_utc, is_deleted)
+                VALUES(?, ?, ?, 0)
+                """,
+                (user_id, slug, solved_at_utc),
+            )
             return True
 
-        existing_id, existing_ts = row
-        if solved_at_utc - existing_ts >= THIRTY_DAYS:
-            c.execute("UPDATE completions SET is_deleted=1 WHERE id=?", (existing_id,))
-            c.execute("""
-              INSERT INTO completions(telegram_user_id,slug,solved_at_utc,is_deleted)
-              VALUES(?,?,?,0)
-            """, (telegram_user_id, slug, solved_at_utc))
+        if solved_at_utc - row["solved_at_utc"] >= thirty_days:
+            c.execute("UPDATE completions SET is_deleted=1 WHERE id=?", (row["id"],))
+            c.execute(
+                """
+                INSERT INTO completions(user_id, slug, solved_at_utc, is_deleted)
+                VALUES(?, ?, ?, 0)
+                """,
+                (user_id, slug, solved_at_utc),
+            )
             return True
 
         return False
 
-def weekly_counts(chat_id:int, start:int, end:int):
+
+def get_user_counts(user_id: int, start: Optional[int] = None, end: Optional[int] = None):
+    sql = """
+        SELECT p.difficulty, COUNT(*) AS c
+        FROM completions co
+        JOIN problems p ON p.slug = co.slug
+        WHERE co.user_id=? AND co.is_deleted=0
+    """
+    params: list[int] = [user_id]
+    if start is not None:
+        sql += " AND co.solved_at_utc>=?"
+        params.append(start)
+    if end is not None:
+        sql += " AND co.solved_at_utc<?"
+        params.append(end)
+    sql += " GROUP BY p.difficulty"
     with conn() as c:
-        return c.execute("""
-            SELECT co.telegram_user_id, p.difficulty, COUNT(*) AS c
-            FROM completions AS co
-            JOIN problems   AS p ON p.slug = co.slug
-            JOIN memberships AS m ON m.telegram_user_id = co.telegram_user_id
+        rows = c.execute(sql, params).fetchall()
+    return {row["difficulty"]: row["c"] for row in rows}
+
+
+def weekly_counts(chat_id: int, start: int, end: int):
+    with conn() as c:
+        return c.execute(
+            """
+            SELECT co.user_id, p.difficulty, COUNT(*) AS c
+            FROM completions co
+            JOIN problems p ON p.slug = co.slug
+            JOIN memberships m ON m.user_id = co.user_id
             WHERE m.chat_id = ?
               AND co.solved_at_utc >= ?
               AND co.solved_at_utc < ?
               AND co.is_deleted = 0
-            GROUP BY co.telegram_user_id, p.difficulty
-        """, (chat_id, start, end)).fetchall()
+            GROUP BY co.user_id, p.difficulty
+            """,
+            (chat_id, start, end),
+        ).fetchall()
+
+
+def weekly_counts_discord(guild_id: str, channel_id: str, start: int, end: int):
+    with conn() as c:
+        return c.execute(
+            """
+            SELECT co.user_id, p.difficulty, COUNT(*) AS c
+            FROM completions co
+            JOIN problems p ON p.slug = co.slug
+            JOIN discord_channel_memberships dcm ON dcm.user_id = co.user_id
+            WHERE dcm.guild_id = ?
+              AND dcm.channel_id = ?
+              AND co.solved_at_utc >= ?
+              AND co.solved_at_utc < ?
+              AND co.is_deleted = 0
+            GROUP BY co.user_id, p.difficulty
+            """,
+            (guild_id, channel_id, start, end),
+        ).fetchall()
+
+
+def get_any_platform_identity(user_id: int):
+    with conn() as c:
+        row = c.execute(
+            """
+            SELECT
+              u.lc_username,
+              tl.telegram_user_id,
+              tl.tg_username,
+              dl.discord_user_id,
+              dl.discord_username
+            FROM users u
+            LEFT JOIN telegram_links tl ON tl.user_id = u.id
+            LEFT JOIN discord_links dl ON dl.user_id = u.id
+            WHERE u.id=?
+            """,
+            (user_id,),
+        ).fetchone()
+        return row

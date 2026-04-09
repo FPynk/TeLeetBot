@@ -1,218 +1,152 @@
-import asyncio, time
+import html
+import time
 from datetime import datetime, timezone
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from .config import BOT_TOKEN, POLL_SEC, DEFAULT_WEIGHTS
+
 from . import db
-from .leetcode import LCClient
-from .scoring import parse_weights, score_counts
-from .timeutil import week_window_cst
 from .commands import router as cmd_router
+from .config import BOT_TOKEN
+from .leaderboard import rank_rows
+from .leetcode import LCClient
+from .scoring import parse_weights
+from .timeutil import week_window_cst
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 dp.include_router(cmd_router)
 lc = LCClient()
 
-async def poll_loop():
-    # let bot boot up
-    await asyncio.sleep(3)
-    # main logic loop
-    while True:
-        users = db.get_tracked_users()  # [(tg_id, lc_username, tg_username)]
-        for tg_id, lc_user, tg_un in users:
-            tg_un = tg_un or ""
-            try:
-                # get last processed AC timestamp
-                cutoff = db.get_or_set_last_seen(lc_user) or 0
 
-                # filter out for most recent ACs
-                subs = await lc.recent_ac(lc_user, limit=12)
-                new = [s for s in subs if int(s["timestamp"]) > cutoff]
-                print(f"[poll] {lc_user}, cutoff={cutoff}, {len(new)} new")   # logging
-                new.sort(key=lambda s: s["timestamp"])  # sort olderst to newest
-                for s in new:
-                    slug = s["titleSlug"]; ts = int(s["timestamp"])
-                    # fetch problem meta/cached
-                    from sqlite3 import Row
-                    # naive cache check
-                    inserted = False
+async def start_telegram():
+    await dp.start_polling(bot)
 
-                    # cache meta if needed
-                    with db.conn() as c:
-                        r = c.execute("SELECT slug FROM problems WHERE slug=?", (slug,)).fetchone()
-                    if not r:
-                        # incase problem meta data not stored
-                        meta = await lc.problem_meta(slug)
-                        db.upsert_problem(slug, meta["title"], meta["difficulty"])
 
-                    # insert completion (dedup by UNIQUE(user, slug))
-                    inserted = db.insert_completion(tg_id, slug, ts)
-                    if inserted:
-                        # announce to all chats user joined
-                        chats = db.get_user_chats(tg_id)
-                        for chat_id, post_on_solve, scoring in chats:
-                            # skip if option disabled
-                            if not post_on_solve: continue
+async def resolve_telegram_name(chat_id: int, user_id: int) -> str:
+    link = db.get_telegram_link_for_user(user_id)
+    identity = db.get_any_platform_identity(user_id)
+    lc_username = identity["lc_username"] if identity else str(user_id)
 
-                            # compute user's week counts quick
-                            start,end = week_window_cst(datetime.now(timezone.utc))
-                            with db.conn() as c:
-                                rows = c.execute("""
-                                  SELECT p.difficulty, COUNT(*) FROM completions co
-                                  JOIN problems p ON p.slug=co.slug
-                                  WHERE co.telegram_user_id=? AND co.solved_at_utc>=? AND co.solved_at_utc<?
-                                  GROUP BY 1
-                                """,(tg_id,start,end)).fetchall()
-                            counts = {r[0]: r[1] for r in rows}
-                            e,m,h = parse_weights(scoring)
-                            total = score_counts(counts,(e,m,h))
-                            # get title/difficulty for message
-                            with db.conn() as c:
-                                title, diff = c.execute("SELECT title,difficulty FROM problems WHERE slug=?", (slug,)).fetchone()
-                            
-                            # format message
-                            try:
-                                member = await bot.get_chat_member(chat_id, tg_id)
-                                uname = member.user.username
-                                name = f"@{uname}" if uname else (member.user.full_name or "A member")
-                            except Exception as e:
-                                print(
-                                    f"[Error] get_chat_member failed chat_id={chat_id} "
-                                    f"tg_id={tg_id} lc_username={lc_user} tg_username={tg_un} exc={e}"
-                                )
-                                name = f"@{tg_un}" if tg_un else "A member"
-                            msg = f"🎉 {name} solved <b>{title}</b> (<i>{diff}</i>).\nWeekly score: <b>{total}</b>  — E:{counts.get('Easy',0)} M:{counts.get('Medium',0)} H:{counts.get('Hard',0)}"
-                            try:
-                                await bot.send_message(chat_id, msg, parse_mode="HTML", disable_web_page_preview=True)
-                            except Exception:
-                                pass
-                    # bump last_seen as we walk forward
-                    db.get_or_set_last_seen(lc_user, ts)
-            except Exception:
-                # swallow per-user errors; continue
-                pass
-            await asyncio.sleep(0.5)  # mild pacing
-        await asyncio.sleep(POLL_SEC)
+    if not link:
+        return html.escape(lc_username)
+
+    tg_id = link["telegram_user_id"]
+    tg_username = link["tg_username"] or ""
+    try:
+        member = await bot.get_chat_member(chat_id, tg_id)
+        username = member.user.username
+        if username:
+            return html.escape(f"@{username}")
+        full_name = member.user.full_name or lc_username
+        return html.escape(full_name)
+    except Exception as exc:
+        print(
+            f"[Error] telegram get_chat_member failed chat_id={chat_id} "
+            f"user_id={user_id} telegram_user_id={tg_id} exc={exc}"
+        )
+        if tg_username:
+            return html.escape(f"@{tg_username}")
+        return html.escape(lc_username)
+
+
+async def send_telegram_solve_announcement(
+    chat_id: int,
+    user_id: int,
+    title: str,
+    difficulty: str,
+    total: int,
+    counts: dict[str, int],
+):
+    name = await resolve_telegram_name(chat_id, user_id)
+    msg = (
+        f"{name} solved <b>{html.escape(title)}</b> (<i>{html.escape(difficulty)}</i>).\n"
+        f"Weekly score: <b>{total}</b> - "
+        f"E:{counts.get('Easy', 0)} M:{counts.get('Medium', 0)} H:{counts.get('Hard', 0)}"
+    )
+    try:
+        await bot.send_message(
+            chat_id,
+            msg,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        print(f"[Error] telegram send_message failed chat_id={chat_id} exc={exc}")
+
+
+async def _telegram_rank_lines(chat_id: int, scored) -> list[str]:
+    lines = []
+    rank = 1
+    for entry in scored[:10]:
+        name = await resolve_telegram_name(chat_id, entry["user_id"])
+        counts = entry["counts"]
+        lines.append(
+            f"{rank}. {name} - <b>{entry['total']}</b> "
+            f"(E:{counts['Easy']} M:{counts['Medium']} H:{counts['Hard']})"
+        )
+        rank += 1
+    return lines
+
+
+async def post_telegram_leaderboard(chat_id: int, scoring: str, scored, header: str):
+    if not scored:
+        return
+    e, m, h = parse_weights(scoring)
+    lines = [f"🏆 <b>{html.escape(header)}</b>\nPoint allocation: (E={e}, M={m}, H={h})\n"]
+    lines.extend(await _telegram_rank_lines(chat_id, scored))
+    try:
+        await bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+    except Exception as exc:
+        print(f"[Error] telegram leaderboard send failed chat_id={chat_id} exc={exc}")
+
+
+async def post_telegram_champion(chat_id: int, scored):
+    if not scored:
+        return
+    top_total = scored[0]["total"]
+    winners = [entry for entry in scored if entry["total"] == top_total]
+    winner_names = [await resolve_telegram_name(chat_id, entry["user_id"]) for entry in winners]
+    lines = [f"👑 <b>Weekly Champion</b> - {' & '.join(winner_names)} (score <b>{top_total}</b>)\n"]
+    lines.append("<i>Final standings</i>")
+    lines.extend(await _telegram_rank_lines(chat_id, scored))
+    try:
+        await bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+    except Exception as exc:
+        print(f"[Error] telegram champion send failed chat_id={chat_id} exc={exc}")
+
 
 @dp.message(Command("leaderboard"))
 async def leaderboard(m: types.Message):
-    requester = m.from_user
-    print(
-        f"[Info] /leaderboard used chat_id={m.chat.id} chat_type={m.chat.type} "
-        f"chat_title={m.chat.title or ''} from_id={requester.id} "
-        f"from_username={requester.username or ''}"
-    )
     chat_id = m.chat.id
-    # ensure chat exists
-    try:
-        db.set_chat(chat_id, m.chat.title or "")
-        print(f"[Info] leaderboard set_chat ok chat_id={chat_id}")
-    except Exception as e:
-        print(f"[Error] leaderboard set_chat failed chat_id={chat_id} exc={e}")
-        raise
-    # get weights
-    try:
-        with db.conn() as c:
-            scoring = c.execute(
-                "SELECT scoring FROM chats WHERE chat_id=?", (chat_id,)
-            ).fetchone()[0]
-        print(f"[Info] leaderboard scoring fetched chat_id={chat_id} scoring={scoring}")
-    except Exception as e:
-        print(f"[Error] leaderboard scoring fetch failed chat_id={chat_id} exc={e}")
-        raise
-    e,mw,h = parse_weights(scoring)
-    start,end = week_window_cst(datetime.now(timezone.utc))
-    try:
-        rows = db.weekly_counts(chat_id, start, end)  # [(tg_id, diff, count)]
-        print(f"[Info] leaderboard weekly_counts chat_id={chat_id} rows={len(rows)}")
-    except Exception as e:
-        print(f"[Error] leaderboard weekly_counts failed chat_id={chat_id} exc={e}")
-        raise
-    # aggregate
-    agg = {}
-    for uid, diff, c in rows:
-        agg.setdefault(uid, {"Easy":0,"Medium":0,"Hard":0})
-        agg[uid][diff] = c
-    # score
-    scored = []
-    for uid, counts in agg.items():
-        total = counts["Easy"]*e + counts["Medium"]*mw + counts["Hard"]*h
-        scored.append((uid, total, counts))
-    scored.sort(key=lambda x: (-x[1], -x[2]["Hard"], -x[2]["Medium"]))
+    db.set_chat(chat_id, m.chat.title or "")
+    scoring = db.get_chat_scoring(chat_id) or "1,2,5"
+    start, end = week_window_cst(datetime.now(timezone.utc))
+    rows = db.weekly_counts(chat_id, start, end)
+    scored, weights = rank_rows(rows, scoring)
     if not scored:
-        print(f"[Info] leaderboard no scores chat_id={chat_id}")
         return await m.reply("No solves yet this week.")
-    print(f"[Info] leaderboard scored_users chat_id={chat_id} count={len(scored)}")
+
+    e, mw, h = weights
     lines = [f"🏆 <b>This week's leaderboard</b>\nPoint allocation: (E={e}, M={mw}, H={h})\n"]
-    rank = 1
-    failed_unames = []
-    for uid, total, cts in scored[:10]:
-        with db.conn() as c:
-            row = c.execute(
-                "SELECT tg_username FROM users WHERE telegram_user_id=?",
-                (uid,),
-            ).fetchone()
-        tg_un = row[0] if row and row[0] else ""
-        try:
-            member = await bot.get_chat_member(chat_id, uid)
-            name = f"@{member.user.username}" if member.user.username else (member.user.full_name or str(uid))
-        except Exception as e:
-            print(
-                f"[Error] get_chat_member failed chat_id={chat_id} tg_id={uid} tg_username={tg_un} exc={e}"
-            )
-            name = f"@{tg_un}" if tg_un else str(uid)
-            if tg_un:
-                failed_unames.append(f"@{tg_un}")
-        lines.append(f"{rank}. {name} — <b>{total}</b> (E:{cts['Easy']} M:{cts['Medium']} H:{cts['Hard']})")
-        rank += 1
-    if failed_unames:
-        lines.append(
-            "Debug: " + ", ".join(failed_unames) + ", please use /relink leetcode_username"
-        )
-    try:
-        await m.reply("\n".join(lines), parse_mode="HTML")
-        print(f"[Info] leaderboard reply sent chat_id={chat_id}")
-    except Exception as e:
-        print(f"[Error] leaderboard reply failed chat_id={chat_id} exc={e}")
-        raise
+    lines.extend(await _telegram_rank_lines(chat_id, scored))
+    await m.reply("\n".join(lines), parse_mode="HTML")
+
 
 @dp.message(Command("stats"))
 async def stats(m: types.Message):
-    target_id = m.from_user.id
-    if m.entities:
-        # crude: if they mention a user, use that
-        for ent in m.entities:
-            if ent.type == "mention":  # e.g., @user
-                # resolve not trivial without a mapping; keep MVP simple
-                pass
-    start,end = week_window_cst(datetime.now(timezone.utc))
-    with db.conn() as c:
-        rows = c.execute("""
-          SELECT p.difficulty, COUNT(*) FROM completions co
-          JOIN problems p ON p.slug=co.slug
-          WHERE co.telegram_user_id=? GROUP BY 1
-        """,(target_id,)).fetchall()
-        week = c.execute("""
-          SELECT p.difficulty, COUNT(*) FROM completions co
-          JOIN problems p ON p.slug=co.slug
-          WHERE co.telegram_user_id=? AND co.solved_at_utc>=? AND co.solved_at_utc<?
-          GROUP BY 1
-        """,(target_id,start,end)).fetchall()
-    total = {r[0]: r[1] for r in rows}
-    wk = {r[0]: r[1] for r in week}
-    await m.reply(f"Lifetime — E:{total.get('Easy',0)} M:{total.get('Medium',0)} H:{total.get('Hard',0)}\n"
-                  f"This week — E:{wk.get('Easy',0)} M:{wk.get('Medium',0)} H:{wk.get('Hard',0)}")
+    user = db.get_user_by_telegram_id(m.from_user.id)
+    if not user:
+        return await m.reply("Link first with /link leetcode_username.")
 
-async def main():
-    db.init()
-    loop = asyncio.get_event_loop()
-    loop.create_task(poll_loop())
-    await dp.start_polling(bot)
+    start, end = week_window_cst(datetime.now(timezone.utc))
+    total = db.get_user_counts(user["user_id"])
+    week = db.get_user_counts(user["user_id"], start, end)
+    await m.reply(
+        f"Lifetime - E:{total.get('Easy', 0)} M:{total.get('Medium', 0)} H:{total.get('Hard', 0)}\n"
+        f"This week - E:{week.get('Easy', 0)} M:{week.get('Medium', 0)} H:{week.get('Hard', 0)}"
+    )
 
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
 
 @dp.message(Command("debug_me"))
 async def debug_me(m: types.Message):
@@ -223,122 +157,112 @@ async def debug_me(m: types.Message):
     current_tg_un = m.from_user.username or ""
 
     if lcname:
-        with db.conn() as c:
-            row = c.execute(
-                "SELECT telegram_user_id, tg_username, lc_username FROM users WHERE lc_username=?",
-                (lcname,),
-            ).fetchone()
-        if not row:
-            return await m.reply(f"No Telegram user linked to LC '{lcname}'.")
-        stored_tg_id, stored_tg_un, lc = row
+        user = db.get_user_by_lc(lcname)
+        if not user:
+            return await m.reply(f"No user linked to LC '{lcname}'.")
     else:
-        with db.conn() as c:
-            row = c.execute(
-                "SELECT telegram_user_id, tg_username, lc_username FROM users WHERE telegram_user_id=?",
-                (current_tg_id,),
-            ).fetchone()
-        if not row:
+        user = db.get_user_by_telegram_id(current_tg_id)
+        if not user:
             return await m.reply("No mapping found. Link first with /link leetcode_username.")
-        stored_tg_id, stored_tg_un, lc = row
+        user = db.get_user_by_id(user["user_id"])
 
-    # last_seen
-    with db.conn() as c:
-        seen = c.execute("SELECT last_seen_ts FROM last_seen WHERE lc_username=?", (lc,)).fetchone()
-    ls = seen[0] if seen else 0
+    link = db.get_telegram_link_for_user(user["id"])
+    ls = db.get_or_set_last_seen(user["lc_username"]) or 0
     ls_h = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(ls)) if ls else "0"
 
+    stored_tg_id = link["telegram_user_id"] if link else None
+    stored_tg_un = link["tg_username"] if link else ""
     match = "YES" if stored_tg_id == current_tg_id else "NO"
     lines = [
-        f"LC: {lc}",
-        f"Stored TG ID: {stored_tg_id}",
+        f"LC: {user['lc_username']}",
+        f"Stored TG ID: {stored_tg_id or '(none)'}",
         f"Stored TG @: {stored_tg_un or '(none)'}",
         f"Current TG ID: {current_tg_id}",
         f"Current TG @: {current_tg_un or '(none)'}",
         f"Match: {match}",
         f"last_seen: {ls} ({ls_h})",
     ]
-    if match == "NO":
-        lines.append(f"Suggestion: Use /relink {lc} from the correct account.")
+    if link and match == "NO":
+        lines.append(f"Suggestion: Use /relink {user['lc_username']} from the correct account.")
 
     await m.reply("\n".join(lines))
 
+
 @dp.message(Command("debug_recent"))
 async def debug_recent(m: types.Message):
-    # Usage: /debug_recent [leetcode_username]
     parts = (m.text or "").split()
     lcname = parts[1] if len(parts) > 1 else None
     if not lcname:
-        # default to the caller's linked LC
-        with db.conn() as c:
-            r = c.execute("SELECT lc_username FROM users WHERE telegram_user_id=?", (m.from_user.id,)).fetchone()
-            if not r:
-                return await m.reply("Link first with /link leetcode_username or pass a username: /debug_recent foo")
-            lcname = r[0]
+        user = db.get_user_by_telegram_id(m.from_user.id)
+        if not user:
+            return await m.reply("Link first with /link leetcode_username or pass a username: /debug_recent foo")
+        lcname = user["lc_username"]
 
-    # find the TG user mapped to this LC (for duplicate checks)
-    with db.conn() as c:
-        r = c.execute("SELECT telegram_user_id FROM users WHERE lc_username=?", (lcname,)).fetchone()
-    if not r:
-        return await m.reply(f"No Telegram user linked to LC '{lcname}'.")
-    tg_id = r[0]
+    target = db.get_user_by_lc(lcname)
+    if not target:
+        return await m.reply(f"No user linked to LC '{lcname}'.")
 
     cutoff = db.get_or_set_last_seen(lcname) or 0
     subs = await lc.recent_ac(lcname, limit=20)
     subs.sort(key=lambda s: int(s["timestamp"]))
     lines = [f"cutoff last_seen={cutoff}"]
     shown = 0
-    for s in reversed(subs):  # newest first
-        t = int(s["timestamp"]); slug = s["titleSlug"]; title = s["title"]
-        # check if first-time completion already recorded
+    for submission in reversed(subs):
+        ts = int(submission["timestamp"])
+        slug = submission["titleSlug"]
+        title = submission["title"]
         with db.conn() as c:
-            seen = c.execute("SELECT 1 FROM completions WHERE telegram_user_id=? AND slug=?", (tg_id, slug)).fetchone()
-        status = []
-        status.append("new" if t > cutoff else "old")
-        status.append("dup" if seen else "first?")
-        lines.append(f"{t}  {title}  [{slug}]  -> {'/'.join(status)}")
+            seen = c.execute(
+                """
+                SELECT 1 FROM completions
+                WHERE user_id=? AND slug=? AND is_deleted=0
+                """,
+                (target["id"], slug),
+            ).fetchone()
+        status = ["new" if ts > cutoff else "old", "dup" if seen else "first?"]
+        lines.append(f"{ts}  {title}  [{slug}]  -> {'/'.join(status)}")
         shown += 1
-        if shown >= 12: break
+        if shown >= 12:
+            break
+
     await m.reply("Recent ACs (newest first):\n" + "\n".join(lines[:30]))
+
 
 @dp.message(Command("debug_lc"))
 async def debug_lc(m: types.Message):
-    # Usage: /debug_lc leetcode_username
     parts = (m.text or "").split()
     if len(parts) != 2:
         return await m.reply("Usage: /debug_lc leetcode_username")
     lcname = parts[1].strip()
 
-    with db.conn() as c:
-        row = c.execute(
-            "SELECT telegram_user_id, tg_username FROM users WHERE lc_username=?",
-            (lcname,),
-        ).fetchone()
-    if not row:
-        return await m.reply(f"No Telegram user linked to LC '{lcname}'.")
-    tg_id, tg_un = row
+    user = db.get_user_by_lc(lcname)
+    if not user:
+        return await m.reply(f"No user linked to LC '{lcname}'.")
 
-    # last_seen
-    with db.conn() as c:
-        seen = c.execute(
-            "SELECT last_seen_ts FROM last_seen WHERE lc_username=?",
-            (lcname,),
-        ).fetchone()
-    ls = seen[0] if seen else 0
+    link = db.get_telegram_link_for_user(user["id"])
+    tg_id = link["telegram_user_id"] if link else None
+    tg_un = link["tg_username"] if link else ""
+    ls = db.get_or_set_last_seen(lcname) or 0
     ls_h = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(ls)) if ls else "0"
 
     chat_id = m.chat.id
     chat_type = m.chat.type
-    try:
-        await bot.get_chat_member(chat_id, tg_id)
-        gm_status = "OK"
+    if tg_id is None:
+        gm_status = "NO_TELEGRAM_LINK"
         gm_error = ""
-    except Exception as e:
-        gm_status = "FAILED"
-        gm_error = f"{e}"
+    else:
+        try:
+            await bot.get_chat_member(chat_id, tg_id)
+            gm_status = "OK"
+            gm_error = ""
+        except Exception as exc:
+            gm_status = "FAILED"
+            gm_error = f"{exc}"
 
     lines = [
         f"LC: {lcname}",
-        f"TG ID: {tg_id}",
+        f"Shared user ID: {user['id']}",
+        f"TG ID: {tg_id or '(none)'}",
         f"TG @: {tg_un or '(none)'}",
         f"last_seen: {ls} ({ls_h})",
         f"get_chat_member: {gm_status} (chat_id={chat_id}, chat_type={chat_type})",
