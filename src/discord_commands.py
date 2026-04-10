@@ -8,6 +8,7 @@ from . import db
 from .help_text import discord_help_message
 from .leaderboard import rank_rows
 from .timeutil import week_window_cst
+from .uptime import current_uptime
 
 
 async def _send_response(interaction: discord.Interaction, content: str, ephemeral: bool = False):
@@ -32,6 +33,15 @@ def register_discord_commands(tree: app_commands.CommandTree):
         await _send_response(
             interaction,
             discord_help_message(),
+            ephemeral=True,
+        )
+
+    @tree.command(name="uptime", description="Show the bot uptime")
+    @app_commands.guild_only()
+    async def uptime(interaction: discord.Interaction):
+        await _send_response(
+            interaction,
+            f"Uptime: {current_uptime()}",
             ephemeral=True,
         )
 

@@ -1,31 +1,15 @@
 import logging
 import sqlite3
-import time
 
 from aiogram import Router, types
 from aiogram.filters import Command
 
 from . import db
 from .help_text import telegram_help_message
+from .uptime import current_uptime
 
 router = Router()
-START_TS = int(time.time())
 logger = logging.getLogger(__name__)
-
-
-def _format_uptime(seconds: int) -> str:
-    days, rem = divmod(seconds, 86400)
-    hours, rem = divmod(rem, 3600)
-    mins, secs = divmod(rem, 60)
-    parts = []
-    if days:
-        parts.append(f"{days}d")
-    if hours or days:
-        parts.append(f"{hours}h")
-    if mins or hours or days:
-        parts.append(f"{mins}m")
-    parts.append(f"{secs}s")
-    return " ".join(parts)
 
 
 def _log_db_error(command: str, m: types.Message, exc: Exception, lc_username: str | None = None):
@@ -51,12 +35,17 @@ async def start(m: types.Message):
 @router.message(Command("help"))
 async def help(m: types.Message):
     args = (m.text or "").split()[1:]
-    uptime = _format_uptime(int(time.time()) - START_TS)
+    uptime = current_uptime()
     if not args:
         return await m.answer(telegram_help_message(uptime))
     if args == ["-c"]:
         return await m.answer(telegram_help_message(uptime, commands_only=True), parse_mode="HTML")
     await m.answer("Usage: /help or /help -c")
+
+
+@router.message(Command("uptime"))
+async def uptime(m: types.Message):
+    await m.answer(f"Uptime: {current_uptime()}")
 
 
 @router.message(Command("link"))
