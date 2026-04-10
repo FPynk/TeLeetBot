@@ -13,9 +13,20 @@ async def main():
     tasks = [asyncio.create_task(start_telegram(), name="telegram-client")]
     if discord_enabled():
         discord_task = asyncio.create_task(start_discord(), name="discord-client")
-        tasks.append(discord_task)
-        # Do not start the shared poller until Discord can actually send messages.
-        await wait_for_discord_ready(discord_task)
+        try:
+            # Do not start the shared poller until Discord can actually send messages.
+            await wait_for_discord_ready(discord_task)
+        except Exception as exc:
+            print(
+                "[Discord] startup failed - continuing without Discord for this run: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            if not discord_task.done():
+                discord_task.cancel()
+            # Consume the failed task so it does not surface later and take Telegram down.
+            await asyncio.gather(discord_task, return_exceptions=True)
+        else:
+            tasks.append(discord_task)
     else:
         print("[Discord] disabled - set DISCORD_BOT_TOKEN and DISCORD_APP_ID to enable it")
 
