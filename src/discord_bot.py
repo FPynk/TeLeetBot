@@ -51,22 +51,23 @@ async def wait_for_discord_ready(discord_task: asyncio.Task | None):
         return
 
     ready_waiter = asyncio.create_task(discord_client.wait_until_ready())
-    done, pending = await asyncio.wait(
-        {ready_waiter, discord_task},
-        return_when=asyncio.FIRST_COMPLETED,
-    )
+    try:
+        done, _ = await asyncio.wait(
+            {ready_waiter, discord_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
 
-    for task in pending:
-        task.cancel()
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+        if ready_waiter in done:
+            await ready_waiter
+            return
 
-    if ready_waiter in done:
-        await ready_waiter
-        return
-
-    await discord_task
-    raise RuntimeError("Discord client exited before becoming ready.")
+        ready_waiter.cancel()
+        await asyncio.gather(ready_waiter, return_exceptions=True)
+        await discord_task
+        raise RuntimeError("Discord client exited before becoming ready.")
+    finally:
+        if ready_waiter.done():
+            await asyncio.gather(ready_waiter, return_exceptions=True)
 
 
 async def _resolve_channel(channel_id: str):
