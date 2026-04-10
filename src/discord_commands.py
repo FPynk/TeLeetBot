@@ -5,6 +5,7 @@ import discord
 from discord import app_commands
 
 from . import db
+from .help_text import discord_help_message
 from .leaderboard import rank_rows
 from .timeutil import week_window_cst
 
@@ -25,6 +26,15 @@ def _discord_username(interaction: discord.Interaction) -> str:
 
 
 def register_discord_commands(tree: app_commands.CommandTree):
+    @tree.command(name="help", description="Show a getting-started command overview")
+    @app_commands.guild_only()
+    async def help_command(interaction: discord.Interaction):
+        await _send_response(
+            interaction,
+            discord_help_message(),
+            ephemeral=True,
+        )
+
     @tree.command(name="link", description="Link your LeetCode account")
     @app_commands.guild_only()
     async def link(interaction: discord.Interaction, leetcode_username: str):

@@ -6,6 +6,7 @@ from aiogram import Router, types
 from aiogram.filters import Command
 
 from . import db
+from .help_text import telegram_help_message
 
 router = Router()
 START_TS = int(time.time())
@@ -49,11 +50,13 @@ async def start(m: types.Message):
 
 @router.message(Command("help"))
 async def help(m: types.Message):
+    args = (m.text or "").split()[1:]
     uptime = _format_uptime(int(time.time()) - START_TS)
-    await m.answer(
-        "Hello! Link your LeetCode with /link leetcode_username. Then, in each group, use /join to begin showing your progress and enter the leaderboard.\n"
-        f"Uptime: {uptime}"
-    )
+    if not args:
+        return await m.answer(telegram_help_message(uptime))
+    if args == ["-c"]:
+        return await m.answer(telegram_help_message(uptime, commands_only=True), parse_mode="HTML")
+    await m.answer("Usage: /help or /help -c")
 
 
 @router.message(Command("link"))
