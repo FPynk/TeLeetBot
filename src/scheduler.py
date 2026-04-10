@@ -1,3 +1,5 @@
+import asyncio
+
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -12,6 +14,7 @@ from .poller import poll_loop
 from .timeutil import week_window_cst
 
 _SCHEDULER = None
+_POLL_TASK = None
 
 
 async def weekly_leaderboards():
@@ -79,8 +82,6 @@ async def weekly_champion():
 
 async def start_schedulers():
     global _SCHEDULER
-
-    asyncio.create_task(poll_loop())
     now_time = datetime.now(ZoneInfo("America/Chicago"))
     print(f"[setup] Setting scheduler to America/Chicago time, current time: {now_time}")
     if _SCHEDULER is None:
@@ -120,3 +121,10 @@ async def start_schedulers():
 
     if not scheduler.running:
         scheduler.start()
+
+
+def start_poller():
+    global _POLL_TASK
+
+    if _POLL_TASK is None or _POLL_TASK.done():
+        _POLL_TASK = asyncio.create_task(poll_loop())

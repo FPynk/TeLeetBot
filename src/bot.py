@@ -50,6 +50,32 @@ async def resolve_telegram_name(chat_id: int, user_id: int) -> str:
         return html.escape(lc_username)
 
 
+async def resolve_telegram_name_with_hint(chat_id: int, user_id: int) -> tuple[str, str | None]:
+    link = db.get_telegram_link_for_user(user_id)
+    identity = db.get_any_platform_identity(user_id)
+    lc_username = identity["lc_username"] if identity else str(user_id)
+
+    if not link:
+        return html.escape(lc_username), None
+
+    tg_id = link["telegram_user_id"]
+    tg_username = link["tg_username"] or ""
+    try:
+        member = await bot.get_chat_member(chat_id, tg_id)
+        username = member.user.username
+        if username:
+            return html.escape(f"@{username}"), None
+        full_name = member.user.full_name or lc_username
+        return html.escape(full_name), None
+    except Exception as exc:
+        print(
+            f"[Error] telegram get_chat_member failed chat_id={chat_id} "
+            f"user_id={user_id} telegram_user_id={tg_id} exc={exc}"
+        )
+        fallback = html.escape(f"@{tg_username}") if tg_username else html.escape(lc_username)
+        return fallback, lc_username
+
+
 async def send_telegram_solve_announcement(
     chat_id: int,
     user_id: int,
@@ -77,15 +103,29 @@ async def send_telegram_solve_announcement(
 
 async def _telegram_rank_lines(chat_id: int, scored) -> list[str]:
     lines = []
+    relink_hints = []
     rank = 1
     for entry in scored[:10]:
-        name = await resolve_telegram_name(chat_id, entry["user_id"])
+        name, relink_hint = await resolve_telegram_name_with_hint(chat_id, entry["user_id"])
         counts = entry["counts"]
         lines.append(
             f"{rank}. {name} - <b>{entry['total']}</b> "
             f"(E:{counts['Easy']} M:{counts['Medium']} H:{counts['Hard']})"
         )
+        if relink_hint:
+            relink_hints.append(relink_hint)
         rank += 1
+    if relink_hints:
+        unique_hints = []
+        for hint in relink_hints:
+            if hint not in unique_hints:
+                unique_hints.append(hint)
+        lines.append("")
+        lines.append(
+            "Debug: if your Telegram account changed and your name is not resolving, "
+            "use /relink <leetcode_username>. Affected LC usernames: "
+            + ", ".join(unique_hints)
+        )
     return lines
 
 

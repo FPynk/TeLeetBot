@@ -3,19 +3,24 @@ import asyncio
 from src import db
 from src.bot import start_telegram
 from src.config import discord_enabled
-from src.discord_bot import start_discord
-from src.scheduler import start_schedulers
+from src.discord_bot import start_discord, wait_for_discord_ready
+from src.scheduler import start_poller, start_schedulers
 
 
 async def main():
     db.init()
-    await start_schedulers()
 
-    tasks = [start_telegram()]
+    tasks = [asyncio.create_task(start_telegram(), name="telegram-client")]
     if discord_enabled():
-        tasks.append(start_discord())
+        discord_task = asyncio.create_task(start_discord(), name="discord-client")
+        tasks.append(discord_task)
+        # Do not start the shared poller until Discord can actually send messages.
+        await wait_for_discord_ready(discord_task)
     else:
         print("[Discord] disabled - set DISCORD_BOT_TOKEN and DISCORD_APP_ID to enable it")
+
+    await start_schedulers()
+    start_poller()
 
     await asyncio.gather(*tasks)
 

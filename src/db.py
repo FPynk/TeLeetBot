@@ -321,7 +321,15 @@ def get_discord_link_for_user(user_id: int):
 def get_tracked_users():
     with conn() as c:
         return c.execute(
-            "SELECT id AS user_id, lc_username FROM users ORDER BY id"
+            """
+            -- Only poll LC users that still have at least one live platform link.
+            SELECT DISTINCT u.id AS user_id, u.lc_username
+            FROM users u
+            LEFT JOIN telegram_links tl ON tl.user_id = u.id
+            LEFT JOIN discord_links dl ON dl.user_id = u.id
+            WHERE tl.telegram_user_id IS NOT NULL OR dl.discord_user_id IS NOT NULL
+            ORDER BY u.id
+            """
         ).fetchall()
 
 
@@ -367,6 +375,7 @@ def get_or_set_last_seen(lc_username: str, ts: Optional[int] = None):
 def link_telegram_account(telegram_user_id: int, tg_username: str, lc_username: str):
     now = int(time.time())
     with conn() as c:
+        # Look up the Telegram caller's current shared user, if they already have one.
         current = c.execute(
             """
             SELECT u.id AS user_id, u.lc_username
@@ -376,12 +385,8 @@ def link_telegram_account(telegram_user_id: int, tg_username: str, lc_username: 
             """,
             (telegram_user_id,),
         ).fetchone()
-        if current and current["lc_username"] != lc_username:
-            return False, (
-                f"Your Telegram is already linked to LeetCode '{current['lc_username']}'. "
-                "Use /unlink first, then /link leetcode_username."
-            )
 
+        # Look up the requested LC username and see whether another Telegram account already owns it.
         target = c.execute(
             """
             SELECT u.id AS user_id, u.lc_username, tl.telegram_user_id AS linked_tg_id
@@ -395,20 +400,58 @@ def link_telegram_account(telegram_user_id: int, tg_username: str, lc_username: 
         if target and target["linked_tg_id"] and target["linked_tg_id"] != telegram_user_id:
             return False, (
                 "That LeetCode username is already linked by another Telegram user. "
-                "Ask them to /unlink first or use a different LeetCode account."
+                "Ask them to relink it from the correct Telegram account or use a different LeetCode account."
+            )
+
+        if current and current["lc_username"] == lc_username:
+            # Same logical link, just refresh the cached Telegram username.
+            c.execute(
+                "UPDATE telegram_links SET tg_username=? WHERE telegram_user_id=?",
+                (tg_username, telegram_user_id),
+            )
+            return True, (
+                f"Linked to LeetCode: {lc_username}. "
+                "Please use /join now. I'll track first-time ACs and post to groups you join."
             )
 
         if target is None:
-            cur = c.execute(
-                "INSERT INTO users(lc_username, created_at) VALUES(?, ?)",
-                (lc_username, now),
-            )
-            user_id = cur.lastrowid
-            c.execute(
-                "INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)",
-                (lc_username, now),
-            )
+            if current:
+                # This is the non-destructive "switch my LC username" path for an existing Telegram user.
+                # Reuse the same shared user row so memberships and solve history stay attached.
+                user_id = current["user_id"]
+                old_lc_username = current["lc_username"]
+                c.execute(
+                    "UPDATE users SET lc_username=? WHERE id=?",
+                    (lc_username, user_id),
+                )
+                # Move the poll cursor to the new LC username so the bot does not backfill the old account.
+                c.execute(
+                    "DELETE FROM last_seen WHERE lc_username=?",
+                    (old_lc_username,),
+                )
+                c.execute(
+                    """
+                    INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)
+                    ON CONFLICT(lc_username) DO UPDATE SET last_seen_ts=excluded.last_seen_ts
+                    """,
+                    (lc_username, now),
+                )
+            else:
+                # Brand-new shared user: create the identity row and start tracking from "now".
+                cur = c.execute(
+                    "INSERT INTO users(lc_username, created_at) VALUES(?, ?)",
+                    (lc_username, now),
+                )
+                user_id = cur.lastrowid
+                c.execute(
+                    """
+                    INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)
+                    ON CONFLICT(lc_username) DO UPDATE SET last_seen_ts=excluded.last_seen_ts
+                    """,
+                    (lc_username, now),
+                )
         else:
+            # The target LC user already exists, so attach this Telegram account to that shared user.
             user_id = target["user_id"]
             row = c.execute(
                 "SELECT 1 FROM last_seen WHERE lc_username=?",
@@ -416,11 +459,15 @@ def link_telegram_account(telegram_user_id: int, tg_username: str, lc_username: 
             ).fetchone()
             if row is None:
                 c.execute(
-                    "INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)",
+                    """
+                    INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)
+                    ON CONFLICT(lc_username) DO UPDATE SET last_seen_ts=excluded.last_seen_ts
+                    """,
                     (lc_username, now),
                 )
 
         if current is None:
+            # First Telegram link for this caller.
             c.execute(
                 """
                 INSERT INTO telegram_links(telegram_user_id, user_id, tg_username)
@@ -429,9 +476,28 @@ def link_telegram_account(telegram_user_id: int, tg_username: str, lc_username: 
                 (telegram_user_id, user_id, tg_username),
             )
         else:
+            old_user_id = current["user_id"]
+            if old_user_id != user_id:
+                # Moving a Telegram account onto another shared user should also move its Telegram chat memberships.
+                c.execute(
+                    """
+                    INSERT OR IGNORE INTO memberships(chat_id, user_id)
+                    SELECT chat_id, ? FROM memberships WHERE user_id=?
+                    """,
+                    (user_id, old_user_id),
+                )
+                c.execute(
+                    "DELETE FROM memberships WHERE user_id=?",
+                    (old_user_id,),
+                )
+            # Point the Telegram account at the final shared user row and refresh the cached username.
             c.execute(
-                "UPDATE telegram_links SET tg_username=? WHERE telegram_user_id=?",
-                (tg_username, telegram_user_id),
+                """
+                UPDATE telegram_links
+                SET user_id=?, tg_username=?
+                WHERE telegram_user_id=?
+                """,
+                (user_id, tg_username, telegram_user_id),
             )
 
         return True, (
@@ -471,7 +537,7 @@ def relink_telegram_account(telegram_user_id: int, tg_username: str, lc_username
             ).fetchone()
             return False, (
                 f"Your Telegram is already linked to LeetCode '{other['lc_username']}'. "
-                f"Use /unlink first, then /relink {lc_username}."
+                f"Use /link {lc_username} if you want to switch this Telegram account."
             )
 
         linked_tg_id = target["linked_tg_id"]
@@ -503,6 +569,7 @@ def relink_telegram_account(telegram_user_id: int, tg_username: str, lc_username
 
 def unlink_telegram_account(telegram_user_id: int):
     with conn() as c:
+        # Resolve the Telegram account to the shared user before removing the Telegram-specific rows.
         link = c.execute(
             """
             SELECT tl.user_id, u.lc_username
@@ -517,10 +584,12 @@ def unlink_telegram_account(telegram_user_id: int):
 
         user_id = link["user_id"]
         lc_username = link["lc_username"]
+        # Leaving Telegram should also drop Telegram chat participation for that shared user.
         c.execute("DELETE FROM memberships WHERE user_id=?", (user_id,))
         c.execute("DELETE FROM telegram_links WHERE telegram_user_id=?", (telegram_user_id,))
 
         if not _user_has_any_links(c, user_id):
+            # If Telegram was the last link, clean up the shared user exactly like the old single-platform bot did.
             c.execute("DELETE FROM last_seen WHERE lc_username=?", (lc_username,))
             c.execute("DELETE FROM users WHERE id=?", (user_id,))
 
@@ -530,6 +599,7 @@ def unlink_telegram_account(telegram_user_id: int):
 def link_discord_account(discord_user_id: str, discord_username: str, lc_username: str):
     now = int(time.time())
     with conn() as c:
+        # Look up the Discord caller's current shared user, if they already have one.
         current = c.execute(
             """
             SELECT u.id AS user_id, u.lc_username
@@ -539,12 +609,8 @@ def link_discord_account(discord_user_id: str, discord_username: str, lc_usernam
             """,
             (discord_user_id,),
         ).fetchone()
-        if current and current["lc_username"] != lc_username:
-            return False, (
-                f"Your Discord is already linked to LeetCode '{current['lc_username']}'. "
-                "Use /unlink first, then /link."
-            )
 
+        # Look up the requested LC username and see whether another Discord account already owns it.
         target = c.execute(
             """
             SELECT u.id AS user_id, dl.discord_user_id AS linked_discord_id
@@ -557,17 +623,52 @@ def link_discord_account(discord_user_id: str, discord_username: str, lc_usernam
         if target and target["linked_discord_id"] and target["linked_discord_id"] != discord_user_id:
             return False, "That LeetCode username is already linked by another Discord user."
 
-        if target is None:
-            cur = c.execute(
-                "INSERT INTO users(lc_username, created_at) VALUES(?, ?)",
-                (lc_username, now),
-            )
-            user_id = cur.lastrowid
+        if current and current["lc_username"] == lc_username:
+            # Same logical link, just refresh the cached Discord username.
             c.execute(
-                "INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)",
-                (lc_username, now),
+                "UPDATE discord_links SET discord_username=? WHERE discord_user_id=?",
+                (discord_username, discord_user_id),
             )
+            return True, (
+                f"Linked to LeetCode: {lc_username}. "
+                "Use /join in a channel to enter that leaderboard."
+            )
+
+        if target is None:
+            if current:
+                # This is the non-destructive "switch my LC username" path for an existing Discord user.
+                # Reuse the same shared user row so Discord channel memberships and solve history stay attached.
+                user_id = current["user_id"]
+                old_lc_username = current["lc_username"]
+                c.execute(
+                    "UPDATE users SET lc_username=? WHERE id=?",
+                    (lc_username, user_id),
+                )
+                # Move the poll cursor to the new LC username so the bot does not backfill the old account.
+                c.execute(
+                    "DELETE FROM last_seen WHERE lc_username=?",
+                    (old_lc_username,),
+                )
+                c.execute(
+                    """
+                    INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)
+                    ON CONFLICT(lc_username) DO UPDATE SET last_seen_ts=excluded.last_seen_ts
+                    """,
+                    (lc_username, now),
+                )
+            else:
+                # Brand-new shared user: create the identity row and start tracking from "now".
+                cur = c.execute(
+                    "INSERT INTO users(lc_username, created_at) VALUES(?, ?)",
+                    (lc_username, now),
+                )
+                user_id = cur.lastrowid
+                c.execute(
+                    "INSERT INTO last_seen(lc_username, last_seen_ts) VALUES(?, ?)",
+                    (lc_username, now),
+                )
         else:
+            # The target LC user already exists, so attach this Discord account to that shared user.
             user_id = target["user_id"]
             row = c.execute(
                 "SELECT 1 FROM last_seen WHERE lc_username=?",
@@ -580,6 +681,7 @@ def link_discord_account(discord_user_id: str, discord_username: str, lc_usernam
                 )
 
         if current is None:
+            # First Discord link for this caller.
             c.execute(
                 """
                 INSERT INTO discord_links(discord_user_id, user_id, discord_username)
@@ -588,9 +690,28 @@ def link_discord_account(discord_user_id: str, discord_username: str, lc_usernam
                 (discord_user_id, user_id, discord_username),
             )
         else:
+            old_user_id = current["user_id"]
+            if old_user_id != user_id:
+                # Moving a Discord account onto another shared user should also move its Discord channel memberships.
+                c.execute(
+                    """
+                    INSERT OR IGNORE INTO discord_channel_memberships(guild_id, channel_id, user_id)
+                    SELECT guild_id, channel_id, ? FROM discord_channel_memberships WHERE user_id=?
+                    """,
+                    (user_id, old_user_id),
+                )
+                c.execute(
+                    "DELETE FROM discord_channel_memberships WHERE user_id=?",
+                    (old_user_id,),
+                )
+            # Point the Discord account at the final shared user row and refresh the cached username.
             c.execute(
-                "UPDATE discord_links SET discord_username=? WHERE discord_user_id=?",
-                (discord_username, discord_user_id),
+                """
+                UPDATE discord_links
+                SET user_id=?, discord_username=?
+                WHERE discord_user_id=?
+                """,
+                (user_id, discord_username, discord_user_id),
             )
 
         return True, f"Linked to LeetCode: {lc_username}. Use /join in a channel to enter that leaderboard."
@@ -625,7 +746,7 @@ def relink_discord_account(discord_user_id: str, discord_username: str, lc_usern
             ).fetchone()
             return False, (
                 f"Your Discord is already linked to LeetCode '{other['lc_username']}'. "
-                f"Use /unlink first, then /relink {lc_username}."
+                f"Use /link {lc_username} if you want to switch this Discord account."
             )
 
         linked_discord_id = target["linked_discord_id"]
