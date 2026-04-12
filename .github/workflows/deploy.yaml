@@ -40,7 +40,7 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Connect to tailnet via OAuth
         uses: tailscale/github-action@v3
@@ -54,7 +54,7 @@ jobs:
 
       - name: Sanity (TS reachability)
         run: |
-          tailscale ping -c 3 fpynkhomelab || tailscale ping -c 3 ${{ secrets.HOMELAB_SSH_HOST }}
+          tailscale ping --timeout=15s --until-direct=false -c 3 fpynkhomelab || tailscale ping --timeout=15s --until-direct=false -c 3 ${{ secrets.HOMELAB_SSH_HOST }}
       # Explainer: verifies we can reach your Beelink via TS name or IP.
 
       - name: Deploy via Tailscale SSH (no keys)
