@@ -1,0 +1,1565 @@
+{
+  "generated_at": "2026-04-12",
+  "scope": {
+    "included": [
+      "bootstrap and runtime orchestration",
+      "shared identity and persistence",
+      "Telegram and Discord command surfaces",
+      "LeetCode polling, scoring, and scheduled summaries",
+      "deployment entry points"
+    ],
+    "excluded": [
+      "debug-only handlers except where they reveal invariants",
+      "message copy helpers in src/help_text.py",
+      "render-only helpers in src/discord_render.py",
+      "uptime formatting helpers in src/uptime.py",
+      "notes, lockfiles, generated artifacts, and vendor-style content"
+    ]
+  },
+  "subsystems": [
+    {
+      "name": "runtime-orchestration",
+      "purpose": "Boot the process, gate Discord startup, and register the poller and scheduler.",
+      "entry_points": [
+        "src/main.py::main",
+        "src/scheduler.py::start_schedulers",
+        "src/scheduler.py::start_poller"
+      ],
+      "related_flows": [
+        "startup-and-runtime",
+        "scheduled-summaries",
+        "solve-ingestion-and-announcements"
+      ]
+    },
+    {
+      "name": "persistence-and-identity",
+      "purpose": "Own the SQLite schema, cross-platform identity model, memberships, completions, and leaderboard queries.",
+      "entry_points": [
+        "src/db.py::init",
+        "src/db.py::link_telegram_account",
+        "src/db.py::link_discord_account",
+        "src/db.py::insert_completion",
+        "src/db.py::weekly_counts",
+        "src/db.py::weekly_counts_discord"
+      ],
+      "related_flows": [
+        "account-linking",
+        "membership-and-leaderboards",
+        "solve-ingestion-and-announcements",
+        "scheduled-summaries"
+      ]
+    },
+    {
+      "name": "telegram-interface",
+      "purpose": "Serve Telegram commands and send Telegram leaderboard and solve messages.",
+      "entry_points": [
+        "src/bot.py::start_telegram",
+        "src/commands.py::link",
+        "src/commands.py::join",
+        "src/bot.py::leaderboard"
+      ],
+      "related_flows": [
+        "startup-and-runtime",
+        "account-linking",
+        "membership-and-leaderboards",
+        "solve-ingestion-and-announcements"
+      ]
+    },
+    {
+      "name": "discord-interface",
+      "purpose": "Run the Discord client, sync slash commands, and send Discord messages.",
+      "entry_points": [
+        "src/discord_bot.py::start_discord",
+        "src/discord_bot.py::wait_for_discord_ready",
+        "src/discord_commands.py::register_discord_commands"
+      ],
+      "related_flows": [
+        "startup-and-runtime",
+        "account-linking",
+        "membership-and-leaderboards",
+        "solve-ingestion-and-announcements"
+      ]
+    },
+    {
+      "name": "leetcode-ingestion-and-scoring",
+      "purpose": "Fetch recent LeetCode submissions, cache problem metadata, and compute weighted standings.",
+      "entry_points": [
+        "src/poller.py::poll_loop",
+        "src/leetcode.py::LCClient.recent_ac",
+        "src/leetcode.py::LCClient.problem_meta",
+        "src/leaderboard.py::rank_rows",
+        "src/timeutil.py::week_window_cst"
+      ],
+      "related_flows": [
+        "solve-ingestion-and-announcements",
+        "membership-and-leaderboards",
+        "scheduled-summaries"
+      ]
+    },
+    {
+      "name": "deployment-and-ops",
+      "purpose": "Define the container image, compose runtime, and GitHub Actions deployment path.",
+      "entry_points": [
+        "Dockerfile::CMD python -m src.main",
+        "docker-compose.yml::services.te-leet-bot",
+        ".github/workflows/deploy.yaml::CI/CD (GHCR + Tailscale OAuth)"
+      ],
+      "related_flows": [
+        "startup-and-runtime"
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "name": "startup-and-runtime",
+      "entry_point": "src/main.py::main",
+      "subsystems": [
+        "runtime-orchestration",
+        "telegram-interface",
+        "discord-interface"
+      ]
+    },
+    {
+      "name": "account-linking",
+      "entry_point": "src/commands.py and src/discord_commands.py::register_discord_commands",
+      "subsystems": [
+        "telegram-interface",
+        "discord-interface",
+        "persistence-and-identity"
+      ]
+    },
+    {
+      "name": "membership-and-leaderboards",
+      "entry_point": "Telegram and Discord join/leave/leaderboard/stats commands",
+      "subsystems": [
+        "telegram-interface",
+        "discord-interface",
+        "persistence-and-identity",
+        "leetcode-ingestion-and-scoring"
+      ]
+    },
+    {
+      "name": "solve-ingestion-and-announcements",
+      "entry_point": "src/poller.py::poll_loop",
+      "subsystems": [
+        "runtime-orchestration",
+        "persistence-and-identity",
+        "telegram-interface",
+        "discord-interface",
+        "leetcode-ingestion-and-scoring"
+      ]
+    },
+    {
+      "name": "scheduled-summaries",
+      "entry_point": "src/scheduler.py::start_schedulers",
+      "subsystems": [
+        "runtime-orchestration",
+        "persistence-and-identity",
+        "telegram-interface",
+        "discord-interface",
+        "leetcode-ingestion-and-scoring"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "src/main.py",
+      "subsystem": "runtime-orchestration",
+      "short_purpose": "Primary process bootstrap for DB init, transport startup, scheduler registration, and poller startup.",
+      "important_symbols": [
+        "main"
+      ]
+    },
+    {
+      "path": "src/config.py",
+      "subsystem": "runtime-orchestration",
+      "short_purpose": "Loads env vars, enforces required token invariants, and defines global runtime constants.",
+      "important_symbols": [
+        "discord_enabled"
+      ]
+    },
+    {
+      "path": "src/scheduler.py",
+      "subsystem": "runtime-orchestration",
+      "short_purpose": "Registers APScheduler jobs and owns creation of the shared poller task.",
+      "important_symbols": [
+        "start_schedulers",
+        "start_poller",
+        "weekly_leaderboards",
+        "weekly_champion"
+      ]
+    },
+    {
+      "path": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "SQLite schema, migration, link management, memberships, completion dedupe, and leaderboard queries.",
+      "important_symbols": [
+        "init",
+        "link_telegram_account",
+        "relink_telegram_account",
+        "unlink_telegram_account",
+        "link_discord_account",
+        "relink_discord_account",
+        "unlink_discord_account",
+        "set_chat",
+        "set_discord_channel",
+        "join_chat",
+        "join_discord_channel",
+        "get_tracked_users",
+        "get_or_set_last_seen",
+        "insert_completion",
+        "weekly_counts",
+        "weekly_counts_discord"
+      ]
+    },
+    {
+      "path": "src/commands.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Telegram command handlers for linking, membership changes, help, uptime, and admin toggles.",
+      "important_symbols": [
+        "link",
+        "unlink",
+        "relink",
+        "join",
+        "leave",
+        "postflag"
+      ]
+    },
+    {
+      "path": "src/bot.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Telegram dispatcher bootstrap, leaderboard and stats handlers, and outbound Telegram announcement helpers.",
+      "important_symbols": [
+        "start_telegram",
+        "leaderboard",
+        "stats",
+        "send_telegram_solve_announcement",
+        "post_telegram_leaderboard",
+        "post_telegram_champion"
+      ]
+    },
+    {
+      "path": "src/discord_bot.py",
+      "subsystem": "discord-interface",
+      "short_purpose": "Discord client lifecycle, command sync, channel resolution, and outbound Discord announcement helpers.",
+      "important_symbols": [
+        "TeLeetDiscordClient",
+        "start_discord",
+        "wait_for_discord_ready",
+        "send_discord_solve_announcement",
+        "post_discord_leaderboard",
+        "post_discord_champion"
+      ]
+    },
+    {
+      "path": "src/discord_commands.py",
+      "subsystem": "discord-interface",
+      "short_purpose": "Registers Discord slash commands for linking, membership changes, leaderboard reads, stats, and announcement toggles.",
+      "important_symbols": [
+        "register_discord_commands"
+      ]
+    },
+    {
+      "path": "src/poller.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Long-running background loop that polls LeetCode, inserts solves, and fans out announcements.",
+      "important_symbols": [
+        "poll_loop"
+      ]
+    },
+    {
+      "path": "src/leetcode.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Thin async LeetCode GraphQL client for recent accepted submissions and problem metadata.",
+      "important_symbols": [
+        "LCClient",
+        "LCClient.recent_ac",
+        "LCClient.problem_meta"
+      ]
+    },
+    {
+      "path": "src/leaderboard.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Aggregates weekly rows and applies weighted ranking plus tie-break rules.",
+      "important_symbols": [
+        "rank_rows"
+      ]
+    },
+    {
+      "path": "src/scoring.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Parses scoring strings and computes weighted totals.",
+      "important_symbols": [
+        "parse_weights",
+        "score_counts"
+      ]
+    },
+    {
+      "path": "src/timeutil.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Computes the current leaderboard window in America/Chicago.",
+      "important_symbols": [
+        "week_window_cst"
+      ]
+    },
+    {
+      "path": "Dockerfile",
+      "subsystem": "deployment-and-ops",
+      "short_purpose": "Container image build and runtime definition; launches the app with `python -m src.main`.",
+      "important_symbols": []
+    },
+    {
+      "path": "docker-compose.yml",
+      "subsystem": "deployment-and-ops",
+      "short_purpose": "Defines the long-running container, env var injection, and persistent SQLite bind mounts.",
+      "important_symbols": []
+    },
+    {
+      "path": ".github/workflows/deploy.yaml",
+      "subsystem": "deployment-and-ops",
+      "short_purpose": "Builds and pushes the GHCR image, then deploys the Compose service over Tailscale SSH.",
+      "important_symbols": []
+    }
+  ],
+  "symbols": [
+    {
+      "ref": "src/main.py::main",
+      "name": "main",
+      "kind": "function",
+      "signature": "async def main()",
+      "file": "src/main.py",
+      "subsystem": "runtime-orchestration",
+      "short_purpose": "Bootstraps DB init, transport clients, scheduler registration, and poller startup.",
+      "tags": [
+        "entry-point",
+        "bootstrap"
+      ],
+      "related_symbols": [
+        "src/db.py::init",
+        "src/bot.py::start_telegram",
+        "src/discord_bot.py::start_discord",
+        "src/discord_bot.py::wait_for_discord_ready",
+        "src/scheduler.py::start_schedulers",
+        "src/scheduler.py::start_poller"
+      ],
+      "called_by": [
+        "python -m src.main",
+        "Dockerfile CMD"
+      ],
+      "depends_on": [
+        "src/db.py::init",
+        "src/config.py::discord_enabled"
+      ]
+    },
+    {
+      "ref": "src/config.py::discord_enabled",
+      "name": "discord_enabled",
+      "kind": "function",
+      "signature": "def discord_enabled() -> bool",
+      "file": "src/config.py",
+      "subsystem": "runtime-orchestration",
+      "short_purpose": "Gates whether the Discord client is created and started.",
+      "tags": [
+        "config",
+        "feature-flag"
+      ],
+      "related_symbols": [
+        "src/main.py::main",
+        "src/discord_bot.py::TeLeetDiscordClient"
+      ],
+      "called_by": [
+        "src/main.py::main",
+        "src/discord_bot.py module import"
+      ],
+      "depends_on": [
+        "DISCORD_BOT_TOKEN env var",
+        "DISCORD_APP_ID env var"
+      ]
+    },
+    {
+      "ref": "src/scheduler.py::start_schedulers",
+      "name": "start_schedulers",
+      "kind": "function",
+      "signature": "async def start_schedulers()",
+      "file": "src/scheduler.py",
+      "subsystem": "runtime-orchestration",
+      "short_purpose": "Creates the APScheduler instance and registers recurring summary jobs.",
+      "tags": [
+        "scheduler",
+        "bootstrap"
+      ],
+      "related_symbols": [
+        "src/scheduler.py::weekly_leaderboards",
+        "src/scheduler.py::weekly_champion"
+      ],
+      "called_by": [
+        "src/main.py::main"
+      ],
+      "depends_on": [
+        "APScheduler",
+        "America/Chicago timezone"
+      ]
+    },
+    {
+      "ref": "src/scheduler.py::start_poller",
+      "name": "start_poller",
+      "kind": "function",
+      "signature": "def start_poller()",
+      "file": "src/scheduler.py",
+      "subsystem": "runtime-orchestration",
+      "short_purpose": "Creates the singleton background task that runs `poll_loop()`.",
+      "tags": [
+        "poller",
+        "bootstrap"
+      ],
+      "related_symbols": [
+        "src/poller.py::poll_loop"
+      ],
+      "called_by": [
+        "src/main.py::main"
+      ],
+      "depends_on": [
+        "asyncio.create_task"
+      ]
+    },
+    {
+      "ref": "src/scheduler.py::weekly_leaderboards",
+      "name": "weekly_leaderboards",
+      "kind": "function",
+      "signature": "async def weekly_leaderboards()",
+      "file": "src/scheduler.py",
+      "subsystem": "runtime-orchestration",
+      "short_purpose": "Posts scheduled leaderboard snapshots for every Telegram chat and Discord channel with weekly activity.",
+      "tags": [
+        "scheduler-job",
+        "leaderboard"
+      ],
+      "related_symbols": [
+        "src/db.py::weekly_counts",
+        "src/db.py::weekly_counts_discord",
+        "src/leaderboard.py::rank_rows",
+        "src/bot.py::post_telegram_leaderboard",
+        "src/discord_bot.py::post_discord_leaderboard"
+      ],
+      "called_by": [
+        "APScheduler"
+      ],
+      "depends_on": [
+        "src/timeutil.py::week_window_cst"
+      ]
+    },
+    {
+      "ref": "src/scheduler.py::weekly_champion",
+      "name": "weekly_champion",
+      "kind": "function",
+      "signature": "async def weekly_champion()",
+      "file": "src/scheduler.py",
+      "subsystem": "runtime-orchestration",
+      "short_purpose": "Posts scheduled champion announcements for every Telegram chat and Discord channel with weekly activity.",
+      "tags": [
+        "scheduler-job",
+        "champion"
+      ],
+      "related_symbols": [
+        "src/db.py::weekly_counts",
+        "src/db.py::weekly_counts_discord",
+        "src/leaderboard.py::rank_rows",
+        "src/bot.py::post_telegram_champion",
+        "src/discord_bot.py::post_discord_champion"
+      ],
+      "called_by": [
+        "APScheduler"
+      ],
+      "depends_on": [
+        "src/timeutil.py::week_window_cst"
+      ]
+    },
+    {
+      "ref": "src/db.py::init",
+      "name": "init",
+      "kind": "function",
+      "signature": "def init(db_path: str = \"bot.db\")",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Creates or migrates the SQLite schema and ensures supporting indexes exist.",
+      "tags": [
+        "database",
+        "migration"
+      ],
+      "related_symbols": [
+        "src/db.py::_migrate_telegram_primary_schema",
+        "src/db.py::_create_current_schema",
+        "src/db.py::_ensure_indexes"
+      ],
+      "called_by": [
+        "src/main.py::main"
+      ],
+      "depends_on": [
+        "sqlite3"
+      ]
+    },
+    {
+      "ref": "src/db.py::link_telegram_account",
+      "name": "link_telegram_account",
+      "kind": "function",
+      "signature": "def link_telegram_account(telegram_user_id: int, tg_username: str, lc_username: str)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Creates or repoints a Telegram link to a shared LeetCode user and initializes tracking state.",
+      "tags": [
+        "database",
+        "identity",
+        "telegram"
+      ],
+      "related_symbols": [
+        "src/db.py::relink_telegram_account",
+        "src/db.py::unlink_telegram_account",
+        "src/db.py::get_or_set_last_seen"
+      ],
+      "called_by": [
+        "src/commands.py::link"
+      ],
+      "depends_on": [
+        "users",
+        "telegram_links",
+        "memberships",
+        "last_seen"
+      ]
+    },
+    {
+      "ref": "src/db.py::relink_telegram_account",
+      "name": "relink_telegram_account",
+      "kind": "function",
+      "signature": "def relink_telegram_account(telegram_user_id: int, tg_username: str, lc_username: str)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Repairs a broken Telegram-to-LeetCode mapping by taking ownership of an existing shared user.",
+      "tags": [
+        "database",
+        "identity",
+        "telegram"
+      ],
+      "related_symbols": [
+        "src/db.py::link_telegram_account",
+        "src/db.py::unlink_telegram_account"
+      ],
+      "called_by": [
+        "src/commands.py::relink"
+      ],
+      "depends_on": [
+        "users",
+        "telegram_links"
+      ]
+    },
+    {
+      "ref": "src/db.py::unlink_telegram_account",
+      "name": "unlink_telegram_account",
+      "kind": "function",
+      "signature": "def unlink_telegram_account(telegram_user_id: int)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Removes Telegram linkage and Telegram memberships, and deletes the shared user only if no links remain.",
+      "tags": [
+        "database",
+        "identity",
+        "telegram"
+      ],
+      "related_symbols": [
+        "src/db.py::_user_has_any_links",
+        "src/db.py::link_telegram_account"
+      ],
+      "called_by": [
+        "src/commands.py::unlink"
+      ],
+      "depends_on": [
+        "telegram_links",
+        "memberships",
+        "users",
+        "last_seen"
+      ]
+    },
+    {
+      "ref": "src/db.py::link_discord_account",
+      "name": "link_discord_account",
+      "kind": "function",
+      "signature": "def link_discord_account(discord_user_id: str, discord_username: str, lc_username: str)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Creates or repoints a Discord link to a shared LeetCode user and initializes tracking state.",
+      "tags": [
+        "database",
+        "identity",
+        "discord"
+      ],
+      "related_symbols": [
+        "src/db.py::relink_discord_account",
+        "src/db.py::unlink_discord_account",
+        "src/db.py::get_or_set_last_seen"
+      ],
+      "called_by": [
+        "src/discord_commands.py::register_discord_commands/link"
+      ],
+      "depends_on": [
+        "users",
+        "discord_links",
+        "discord_channel_memberships",
+        "last_seen"
+      ]
+    },
+    {
+      "ref": "src/db.py::relink_discord_account",
+      "name": "relink_discord_account",
+      "kind": "function",
+      "signature": "def relink_discord_account(discord_user_id: str, discord_username: str, lc_username: str)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Repairs a broken Discord-to-LeetCode mapping by taking ownership of an existing shared user.",
+      "tags": [
+        "database",
+        "identity",
+        "discord"
+      ],
+      "related_symbols": [
+        "src/db.py::link_discord_account",
+        "src/db.py::unlink_discord_account"
+      ],
+      "called_by": [
+        "src/discord_commands.py::register_discord_commands/relink"
+      ],
+      "depends_on": [
+        "users",
+        "discord_links"
+      ]
+    },
+    {
+      "ref": "src/db.py::unlink_discord_account",
+      "name": "unlink_discord_account",
+      "kind": "function",
+      "signature": "def unlink_discord_account(discord_user_id: str)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Removes Discord linkage and Discord memberships, and deletes the shared user only if no links remain.",
+      "tags": [
+        "database",
+        "identity",
+        "discord"
+      ],
+      "related_symbols": [
+        "src/db.py::_user_has_any_links",
+        "src/db.py::link_discord_account"
+      ],
+      "called_by": [
+        "src/discord_commands.py::register_discord_commands/unlink"
+      ],
+      "depends_on": [
+        "discord_links",
+        "discord_channel_memberships",
+        "users",
+        "last_seen"
+      ]
+    },
+    {
+      "ref": "src/db.py::set_chat",
+      "name": "set_chat",
+      "kind": "function",
+      "signature": "def set_chat(chat_id: int, title: str, tz: str = None, post_on_solve: int = None, scoring: str = None)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Upserts a Telegram chat row and optionally updates timezone, announcement, or scoring settings.",
+      "tags": [
+        "database",
+        "telegram",
+        "settings"
+      ],
+      "related_symbols": [
+        "src/db.py::join_chat",
+        "src/db.py::weekly_counts"
+      ],
+      "called_by": [
+        "src/commands.py::join",
+        "src/commands.py::postflag",
+        "src/bot.py::leaderboard"
+      ],
+      "depends_on": [
+        "chats"
+      ]
+    },
+    {
+      "ref": "src/db.py::set_discord_channel",
+      "name": "set_discord_channel",
+      "kind": "function",
+      "signature": "def set_discord_channel(guild_id: str, channel_id: str, post_on_solve: int = None, scoring: str = None)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Upserts a Discord channel row and optionally updates announcement or scoring settings.",
+      "tags": [
+        "database",
+        "discord",
+        "settings"
+      ],
+      "related_symbols": [
+        "src/db.py::join_discord_channel",
+        "src/db.py::weekly_counts_discord"
+      ],
+      "called_by": [
+        "src/discord_commands.py::register_discord_commands/join",
+        "src/discord_commands.py::register_discord_commands/leaderboard",
+        "src/discord_commands.py::register_discord_commands/toggle_announcements"
+      ],
+      "depends_on": [
+        "discord_channels"
+      ]
+    },
+    {
+      "ref": "src/db.py::join_chat",
+      "name": "join_chat",
+      "kind": "function",
+      "signature": "def join_chat(chat_id: int, telegram_user_id: int)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Adds the current Telegram-linked shared user to a chat leaderboard.",
+      "tags": [
+        "database",
+        "telegram",
+        "membership"
+      ],
+      "related_symbols": [
+        "src/db.py::leave_chat",
+        "src/db.py::set_chat"
+      ],
+      "called_by": [
+        "src/commands.py::join"
+      ],
+      "depends_on": [
+        "telegram_links",
+        "memberships"
+      ]
+    },
+    {
+      "ref": "src/db.py::join_discord_channel",
+      "name": "join_discord_channel",
+      "kind": "function",
+      "signature": "def join_discord_channel(guild_id: str, channel_id: str, discord_user_id: str)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Adds the current Discord-linked shared user to a channel leaderboard.",
+      "tags": [
+        "database",
+        "discord",
+        "membership"
+      ],
+      "related_symbols": [
+        "src/db.py::leave_discord_channel",
+        "src/db.py::set_discord_channel"
+      ],
+      "called_by": [
+        "src/discord_commands.py::register_discord_commands/join"
+      ],
+      "depends_on": [
+        "discord_links",
+        "discord_channel_memberships"
+      ]
+    },
+    {
+      "ref": "src/db.py::get_tracked_users",
+      "name": "get_tracked_users",
+      "kind": "function",
+      "signature": "def get_tracked_users()",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Returns distinct shared users that still have at least one live platform link and should be polled.",
+      "tags": [
+        "database",
+        "polling"
+      ],
+      "related_symbols": [
+        "src/poller.py::poll_loop"
+      ],
+      "called_by": [
+        "src/poller.py::poll_loop"
+      ],
+      "depends_on": [
+        "users",
+        "telegram_links",
+        "discord_links"
+      ]
+    },
+    {
+      "ref": "src/db.py::get_or_set_last_seen",
+      "name": "get_or_set_last_seen",
+      "kind": "function",
+      "signature": "def get_or_set_last_seen(lc_username: str, ts: Optional[int] = None)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Reads or updates the LeetCode polling cursor for a username.",
+      "tags": [
+        "database",
+        "cursor",
+        "polling"
+      ],
+      "related_symbols": [
+        "src/poller.py::poll_loop",
+        "src/db.py::link_telegram_account",
+        "src/db.py::link_discord_account"
+      ],
+      "called_by": [
+        "src/poller.py::poll_loop",
+        "src/bot.py::debug_me",
+        "src/bot.py::debug_recent",
+        "src/bot.py::debug_lc"
+      ],
+      "depends_on": [
+        "last_seen"
+      ]
+    },
+    {
+      "ref": "src/db.py::insert_completion",
+      "name": "insert_completion",
+      "kind": "function",
+      "signature": "def insert_completion(user_id: int, slug: str, solved_at_utc: int) -> bool",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Inserts a new active completion or re-activates a solve only after the 30-day repeat threshold.",
+      "tags": [
+        "database",
+        "completion",
+        "dedupe"
+      ],
+      "related_symbols": [
+        "src/poller.py::poll_loop"
+      ],
+      "called_by": [
+        "src/poller.py::poll_loop"
+      ],
+      "depends_on": [
+        "completions",
+        "ux_compl_user_slug_active"
+      ]
+    },
+    {
+      "ref": "src/db.py::weekly_counts",
+      "name": "weekly_counts",
+      "kind": "function",
+      "signature": "def weekly_counts(chat_id: int, start: int, end: int)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Aggregates active completion counts by Telegram chat, shared user, and problem difficulty for a time window.",
+      "tags": [
+        "database",
+        "leaderboard",
+        "telegram"
+      ],
+      "related_symbols": [
+        "src/leaderboard.py::rank_rows",
+        "src/timeutil.py::week_window_cst"
+      ],
+      "called_by": [
+        "src/bot.py::leaderboard",
+        "src/scheduler.py::weekly_leaderboards",
+        "src/scheduler.py::weekly_champion"
+      ],
+      "depends_on": [
+        "completions",
+        "problems",
+        "memberships"
+      ]
+    },
+    {
+      "ref": "src/db.py::weekly_counts_discord",
+      "name": "weekly_counts_discord",
+      "kind": "function",
+      "signature": "def weekly_counts_discord(guild_id: str, channel_id: str, start: int, end: int)",
+      "file": "src/db.py",
+      "subsystem": "persistence-and-identity",
+      "short_purpose": "Aggregates active completion counts by Discord channel, shared user, and problem difficulty for a time window.",
+      "tags": [
+        "database",
+        "leaderboard",
+        "discord"
+      ],
+      "related_symbols": [
+        "src/leaderboard.py::rank_rows",
+        "src/timeutil.py::week_window_cst"
+      ],
+      "called_by": [
+        "src/discord_commands.py::register_discord_commands/leaderboard",
+        "src/scheduler.py::weekly_leaderboards",
+        "src/scheduler.py::weekly_champion"
+      ],
+      "depends_on": [
+        "completions",
+        "problems",
+        "discord_channel_memberships"
+      ]
+    },
+    {
+      "ref": "src/bot.py::start_telegram",
+      "name": "start_telegram",
+      "kind": "function",
+      "signature": "async def start_telegram()",
+      "file": "src/bot.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Starts the aiogram long-polling loop for Telegram updates.",
+      "tags": [
+        "telegram",
+        "bootstrap"
+      ],
+      "related_symbols": [
+        "src/main.py::main"
+      ],
+      "called_by": [
+        "src/main.py::main"
+      ],
+      "depends_on": [
+        "aiogram Dispatcher"
+      ]
+    },
+    {
+      "ref": "src/commands.py::link",
+      "name": "link",
+      "kind": "function",
+      "signature": "async def link(m: types.Message)",
+      "file": "src/commands.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Telegram `/link` handler that validates arguments and delegates linking to the DB layer.",
+      "tags": [
+        "telegram-command",
+        "identity"
+      ],
+      "related_symbols": [
+        "src/db.py::link_telegram_account"
+      ],
+      "called_by": [
+        "Telegram dispatcher"
+      ],
+      "depends_on": [
+        "src/db.py::link_telegram_account"
+      ]
+    },
+    {
+      "ref": "src/commands.py::unlink",
+      "name": "unlink",
+      "kind": "function",
+      "signature": "async def unlink(m: types.Message)",
+      "file": "src/commands.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Telegram `/unlink` handler that removes the caller's Telegram-to-LeetCode link.",
+      "tags": [
+        "telegram-command",
+        "identity"
+      ],
+      "related_symbols": [
+        "src/db.py::unlink_telegram_account"
+      ],
+      "called_by": [
+        "Telegram dispatcher"
+      ],
+      "depends_on": [
+        "src/db.py::unlink_telegram_account"
+      ]
+    },
+    {
+      "ref": "src/commands.py::relink",
+      "name": "relink",
+      "kind": "function",
+      "signature": "async def relink(m: types.Message)",
+      "file": "src/commands.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Telegram `/relink` handler that repairs the Telegram ownership of an existing shared user.",
+      "tags": [
+        "telegram-command",
+        "identity"
+      ],
+      "related_symbols": [
+        "src/db.py::relink_telegram_account"
+      ],
+      "called_by": [
+        "Telegram dispatcher"
+      ],
+      "depends_on": [
+        "src/db.py::relink_telegram_account"
+      ]
+    },
+    {
+      "ref": "src/commands.py::join",
+      "name": "join",
+      "kind": "function",
+      "signature": "async def join(m: types.Message)",
+      "file": "src/commands.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Telegram `/join` handler that enrolls the caller's shared user into the current group leaderboard.",
+      "tags": [
+        "telegram-command",
+        "membership"
+      ],
+      "related_symbols": [
+        "src/db.py::set_chat",
+        "src/db.py::join_chat"
+      ],
+      "called_by": [
+        "Telegram dispatcher"
+      ],
+      "depends_on": [
+        "src/db.py::set_chat",
+        "src/db.py::join_chat"
+      ]
+    },
+    {
+      "ref": "src/commands.py::leave",
+      "name": "leave",
+      "kind": "function",
+      "signature": "async def leave(m: types.Message)",
+      "file": "src/commands.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Telegram `/leave` handler that removes the caller's shared user from the current group leaderboard.",
+      "tags": [
+        "telegram-command",
+        "membership"
+      ],
+      "related_symbols": [
+        "src/db.py::leave_chat"
+      ],
+      "called_by": [
+        "Telegram dispatcher"
+      ],
+      "depends_on": [
+        "src/db.py::leave_chat"
+      ]
+    },
+    {
+      "ref": "src/commands.py::postflag",
+      "name": "postflag",
+      "kind": "function",
+      "signature": "async def postflag(m: types.Message)",
+      "file": "src/commands.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Telegram `/postonsolve` handler that toggles live solve announcements for a chat.",
+      "tags": [
+        "telegram-command",
+        "settings"
+      ],
+      "related_symbols": [
+        "src/db.py::set_chat"
+      ],
+      "called_by": [
+        "Telegram dispatcher"
+      ],
+      "depends_on": [
+        "src/db.py::set_chat"
+      ]
+    },
+    {
+      "ref": "src/bot.py::leaderboard",
+      "name": "leaderboard",
+      "kind": "function",
+      "signature": "async def leaderboard(m: types.Message)",
+      "file": "src/bot.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Telegram `/leaderboard` handler that reads current-week standings and replies with ranked results.",
+      "tags": [
+        "telegram-command",
+        "leaderboard"
+      ],
+      "related_symbols": [
+        "src/db.py::set_chat",
+        "src/db.py::weekly_counts",
+        "src/leaderboard.py::rank_rows",
+        "src/timeutil.py::week_window_cst"
+      ],
+      "called_by": [
+        "Telegram dispatcher"
+      ],
+      "depends_on": [
+        "src/db.py::weekly_counts",
+        "src/leaderboard.py::rank_rows"
+      ]
+    },
+    {
+      "ref": "src/bot.py::stats",
+      "name": "stats",
+      "kind": "function",
+      "signature": "async def stats(m: types.Message)",
+      "file": "src/bot.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Telegram `/stats` handler that reports lifetime and current-week difficulty counts for the caller.",
+      "tags": [
+        "telegram-command",
+        "stats"
+      ],
+      "related_symbols": [
+        "src/db.py::get_user_by_telegram_id",
+        "src/db.py::get_user_counts",
+        "src/timeutil.py::week_window_cst"
+      ],
+      "called_by": [
+        "Telegram dispatcher"
+      ],
+      "depends_on": [
+        "src/db.py::get_user_counts"
+      ]
+    },
+    {
+      "ref": "src/bot.py::send_telegram_solve_announcement",
+      "name": "send_telegram_solve_announcement",
+      "kind": "function",
+      "signature": "async def send_telegram_solve_announcement(chat_id: int, user_id: int, title: str, difficulty: str, total: int, counts: dict[str, int])",
+      "file": "src/bot.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Sends a single Telegram solve announcement for a newly-counted completion.",
+      "tags": [
+        "telegram",
+        "announcement"
+      ],
+      "related_symbols": [
+        "src/poller.py::poll_loop"
+      ],
+      "called_by": [
+        "src/poller.py::poll_loop"
+      ],
+      "depends_on": [
+        "aiogram Bot.send_message"
+      ]
+    },
+    {
+      "ref": "src/bot.py::post_telegram_leaderboard",
+      "name": "post_telegram_leaderboard",
+      "kind": "function",
+      "signature": "async def post_telegram_leaderboard(chat_id: int, scoring: str, scored, header: str)",
+      "file": "src/bot.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Posts a scheduled Telegram leaderboard snapshot to a chat.",
+      "tags": [
+        "telegram",
+        "leaderboard"
+      ],
+      "related_symbols": [
+        "src/scheduler.py::weekly_leaderboards"
+      ],
+      "called_by": [
+        "src/scheduler.py::weekly_leaderboards"
+      ],
+      "depends_on": [
+        "src/scoring.py::parse_weights"
+      ]
+    },
+    {
+      "ref": "src/bot.py::post_telegram_champion",
+      "name": "post_telegram_champion",
+      "kind": "function",
+      "signature": "async def post_telegram_champion(chat_id: int, scored)",
+      "file": "src/bot.py",
+      "subsystem": "telegram-interface",
+      "short_purpose": "Posts a scheduled Telegram weekly champion message including final standings.",
+      "tags": [
+        "telegram",
+        "champion"
+      ],
+      "related_symbols": [
+        "src/scheduler.py::weekly_champion"
+      ],
+      "called_by": [
+        "src/scheduler.py::weekly_champion"
+      ],
+      "depends_on": [
+        "aiogram Bot.send_message"
+      ]
+    },
+    {
+      "ref": "src/discord_bot.py::TeLeetDiscordClient",
+      "name": "TeLeetDiscordClient",
+      "kind": "class",
+      "signature": "class TeLeetDiscordClient(discord.Client)",
+      "file": "src/discord_bot.py",
+      "subsystem": "discord-interface",
+      "short_purpose": "Owns the Discord client lifecycle and command tree used by the bot.",
+      "tags": [
+        "discord",
+        "client"
+      ],
+      "related_symbols": [
+        "src/discord_bot.py::TeLeetDiscordClient.setup_hook",
+        "src/discord_commands.py::register_discord_commands"
+      ],
+      "called_by": [
+        "src/discord_bot.py module import"
+      ],
+      "depends_on": [
+        "discord.Client",
+        "discord.app_commands.CommandTree"
+      ]
+    },
+    {
+      "ref": "src/discord_bot.py::TeLeetDiscordClient.setup_hook",
+      "name": "TeLeetDiscordClient.setup_hook",
+      "kind": "method",
+      "signature": "async def setup_hook(self)",
+      "file": "src/discord_bot.py",
+      "subsystem": "discord-interface",
+      "short_purpose": "Registers slash commands and syncs them globally or to the configured dev guild.",
+      "tags": [
+        "discord",
+        "bootstrap",
+        "commands"
+      ],
+      "related_symbols": [
+        "src/discord_commands.py::register_discord_commands"
+      ],
+      "called_by": [
+        "discord.Client lifecycle"
+      ],
+      "depends_on": [
+        "DISCORD_DEV_GUILD_ID",
+        "CommandTree.sync"
+      ]
+    },
+    {
+      "ref": "src/discord_bot.py::start_discord",
+      "name": "start_discord",
+      "kind": "function",
+      "signature": "async def start_discord()",
+      "file": "src/discord_bot.py",
+      "subsystem": "discord-interface",
+      "short_purpose": "Starts the Discord client if Discord support is enabled.",
+      "tags": [
+        "discord",
+        "bootstrap"
+      ],
+      "related_symbols": [
+        "src/discord_bot.py::wait_for_discord_ready"
+      ],
+      "called_by": [
+        "src/main.py::main"
+      ],
+      "depends_on": [
+        "DISCORD_BOT_TOKEN"
+      ]
+    },
+    {
+      "ref": "src/discord_bot.py::wait_for_discord_ready",
+      "name": "wait_for_discord_ready",
+      "kind": "function",
+      "signature": "async def wait_for_discord_ready(discord_task: asyncio.Task | None)",
+      "file": "src/discord_bot.py",
+      "subsystem": "discord-interface",
+      "short_purpose": "Waits until the Discord client is ready or fails early so the main runtime can decide whether to continue without Discord.",
+      "tags": [
+        "discord",
+        "startup-gate"
+      ],
+      "related_symbols": [
+        "src/main.py::main",
+        "src/discord_bot.py::start_discord"
+      ],
+      "called_by": [
+        "src/main.py::main"
+      ],
+      "depends_on": [
+        "discord.Client.wait_until_ready"
+      ]
+    },
+    {
+      "ref": "src/discord_commands.py::register_discord_commands",
+      "name": "register_discord_commands",
+      "kind": "function",
+      "signature": "def register_discord_commands(tree: app_commands.CommandTree)",
+      "file": "src/discord_commands.py",
+      "subsystem": "discord-interface",
+      "short_purpose": "Registers all Discord slash commands, including linking, membership, leaderboard, stats, and announcement toggles.",
+      "tags": [
+        "discord",
+        "commands"
+      ],
+      "related_symbols": [
+        "src/db.py::link_discord_account",
+        "src/db.py::join_discord_channel",
+        "src/db.py::weekly_counts_discord",
+        "src/leaderboard.py::rank_rows"
+      ],
+      "called_by": [
+        "src/discord_bot.py::TeLeetDiscordClient.setup_hook"
+      ],
+      "depends_on": [
+        "discord app commands"
+      ]
+    },
+    {
+      "ref": "src/discord_bot.py::send_discord_solve_announcement",
+      "name": "send_discord_solve_announcement",
+      "kind": "function",
+      "signature": "async def send_discord_solve_announcement(guild_id: str, channel_id: str, user_id: int, title: str, difficulty: str, total: int, counts: dict[str, int])",
+      "file": "src/discord_bot.py",
+      "subsystem": "discord-interface",
+      "short_purpose": "Sends a single Discord solve announcement for a newly-counted completion.",
+      "tags": [
+        "discord",
+        "announcement"
+      ],
+      "related_symbols": [
+        "src/poller.py::poll_loop"
+      ],
+      "called_by": [
+        "src/poller.py::poll_loop"
+      ],
+      "depends_on": [
+        "src/discord_bot.py::_resolve_channel"
+      ]
+    },
+    {
+      "ref": "src/discord_bot.py::post_discord_leaderboard",
+      "name": "post_discord_leaderboard",
+      "kind": "function",
+      "signature": "async def post_discord_leaderboard(guild_id: str, channel_id: str, scoring: str, scored, header: str)",
+      "file": "src/discord_bot.py",
+      "subsystem": "discord-interface",
+      "short_purpose": "Posts a scheduled Discord leaderboard snapshot to a channel.",
+      "tags": [
+        "discord",
+        "leaderboard"
+      ],
+      "related_symbols": [
+        "src/scheduler.py::weekly_leaderboards"
+      ],
+      "called_by": [
+        "src/scheduler.py::weekly_leaderboards"
+      ],
+      "depends_on": [
+        "src/discord_render.py::leaderboard_message"
+      ]
+    },
+    {
+      "ref": "src/discord_bot.py::post_discord_champion",
+      "name": "post_discord_champion",
+      "kind": "function",
+      "signature": "async def post_discord_champion(guild_id: str, channel_id: str, scored)",
+      "file": "src/discord_bot.py",
+      "subsystem": "discord-interface",
+      "short_purpose": "Posts a scheduled Discord champion message including final standings.",
+      "tags": [
+        "discord",
+        "champion"
+      ],
+      "related_symbols": [
+        "src/scheduler.py::weekly_champion"
+      ],
+      "called_by": [
+        "src/scheduler.py::weekly_champion"
+      ],
+      "depends_on": [
+        "src/discord_render.py::champion_message"
+      ]
+    },
+    {
+      "ref": "src/leetcode.py::LCClient",
+      "name": "LCClient",
+      "kind": "class",
+      "signature": "class LCClient",
+      "file": "src/leetcode.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Reusable async GraphQL client for LeetCode queries.",
+      "tags": [
+        "leetcode",
+        "client"
+      ],
+      "related_symbols": [
+        "src/leetcode.py::LCClient.recent_ac",
+        "src/leetcode.py::LCClient.problem_meta"
+      ],
+      "called_by": [
+        "src/poller.py module import",
+        "src/bot.py module import"
+      ],
+      "depends_on": [
+        "httpx.AsyncClient",
+        "https://leetcode.com/graphql"
+      ]
+    },
+    {
+      "ref": "src/leetcode.py::LCClient.recent_ac",
+      "name": "LCClient.recent_ac",
+      "kind": "method",
+      "signature": "async def recent_ac(self, username: str, limit: int = 12) -> List[Dict[str, Any]]",
+      "file": "src/leetcode.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Fetches recent accepted submissions for a LeetCode username and normalizes timestamps to integers.",
+      "tags": [
+        "leetcode",
+        "polling"
+      ],
+      "related_symbols": [
+        "src/poller.py::poll_loop"
+      ],
+      "called_by": [
+        "src/poller.py::poll_loop",
+        "src/bot.py::debug_recent"
+      ],
+      "depends_on": [
+        "_recent_q",
+        "LC_GRAPHQL"
+      ]
+    },
+    {
+      "ref": "src/leetcode.py::LCClient.problem_meta",
+      "name": "LCClient.problem_meta",
+      "kind": "method",
+      "signature": "async def problem_meta(self, slug: str) -> Dict[str, str]",
+      "file": "src/leetcode.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Fetches title and difficulty metadata for a LeetCode problem slug.",
+      "tags": [
+        "leetcode",
+        "metadata"
+      ],
+      "related_symbols": [
+        "src/poller.py::poll_loop",
+        "src/db.py::upsert_problem"
+      ],
+      "called_by": [
+        "src/poller.py::poll_loop"
+      ],
+      "depends_on": [
+        "_problem_q",
+        "LC_GRAPHQL"
+      ]
+    },
+    {
+      "ref": "src/poller.py::poll_loop",
+      "name": "poll_loop",
+      "kind": "function",
+      "signature": "async def poll_loop()",
+      "file": "src/poller.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Continuously polls LeetCode for tracked users, inserts new solves, and sends live announcements.",
+      "tags": [
+        "poller",
+        "background-job",
+        "leetcode"
+      ],
+      "related_symbols": [
+        "src/db.py::get_tracked_users",
+        "src/db.py::get_or_set_last_seen",
+        "src/leetcode.py::LCClient.recent_ac",
+        "src/db.py::insert_completion",
+        "src/bot.py::send_telegram_solve_announcement",
+        "src/discord_bot.py::send_discord_solve_announcement"
+      ],
+      "called_by": [
+        "src/scheduler.py::start_poller"
+      ],
+      "depends_on": [
+        "POLL_SEC",
+        "src/timeutil.py::week_window_cst",
+        "src/scoring.py::parse_weights",
+        "src/scoring.py::score_counts"
+      ]
+    },
+    {
+      "ref": "src/leaderboard.py::rank_rows",
+      "name": "rank_rows",
+      "kind": "function",
+      "signature": "def rank_rows(rows, scoring: str)",
+      "file": "src/leaderboard.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Converts aggregated difficulty counts into ordered leaderboard rows using weighted scoring and tie-breaks.",
+      "tags": [
+        "leaderboard",
+        "ranking"
+      ],
+      "related_symbols": [
+        "src/scoring.py::parse_weights",
+        "src/scoring.py::score_counts"
+      ],
+      "called_by": [
+        "src/bot.py::leaderboard",
+        "src/discord_commands.py::register_discord_commands/leaderboard",
+        "src/scheduler.py::weekly_leaderboards",
+        "src/scheduler.py::weekly_champion"
+      ],
+      "depends_on": [
+        "total desc",
+        "hard desc",
+        "medium desc tie-break"
+      ]
+    },
+    {
+      "ref": "src/scoring.py::parse_weights",
+      "name": "parse_weights",
+      "kind": "function",
+      "signature": "def parse_weights(weights_str: str) -> tuple[int, int, int]",
+      "file": "src/scoring.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Parses a scoring string such as `1,2,5` and falls back to default weights on error.",
+      "tags": [
+        "scoring"
+      ],
+      "related_symbols": [
+        "src/leaderboard.py::rank_rows",
+        "src/poller.py::poll_loop"
+      ],
+      "called_by": [
+        "src/leaderboard.py::rank_rows",
+        "src/poller.py::poll_loop",
+        "src/bot.py::post_telegram_leaderboard",
+        "src/discord_render.py::leaderboard_message"
+      ],
+      "depends_on": [
+        "comma-separated scoring string"
+      ]
+    },
+    {
+      "ref": "src/scoring.py::score_counts",
+      "name": "score_counts",
+      "kind": "function",
+      "signature": "def score_counts(counts: dict[str, int], weights: tuple[int, int, int]) -> int",
+      "file": "src/scoring.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Computes a weighted total from difficulty counts and an `(easy, medium, hard)` scoring tuple.",
+      "tags": [
+        "scoring"
+      ],
+      "related_symbols": [
+        "src/leaderboard.py::rank_rows",
+        "src/poller.py::poll_loop",
+        "src/scoring.py::parse_weights"
+      ],
+      "called_by": [
+        "src/leaderboard.py::rank_rows",
+        "src/poller.py::poll_loop"
+      ],
+      "depends_on": [
+        "difficulty count map",
+        "parsed weight tuple"
+      ]
+    },
+    {
+      "ref": "src/timeutil.py::week_window_cst",
+      "name": "week_window_cst",
+      "kind": "function",
+      "signature": "def week_window_cst(now_utc: datetime) -> tuple[int, int]",
+      "file": "src/timeutil.py",
+      "subsystem": "leetcode-ingestion-and-scoring",
+      "short_purpose": "Computes the current Monday-to-Monday leaderboard window in America/Chicago and returns UTC timestamps.",
+      "tags": [
+        "time",
+        "leaderboard-window"
+      ],
+      "related_symbols": [
+        "src/bot.py::leaderboard",
+        "src/discord_commands.py::register_discord_commands/leaderboard",
+        "src/scheduler.py::weekly_leaderboards",
+        "src/poller.py::poll_loop"
+      ],
+      "called_by": [
+        "src/bot.py::leaderboard",
+        "src/bot.py::stats",
+        "src/discord_commands.py::register_discord_commands/leaderboard",
+        "src/discord_commands.py::register_discord_commands/stats",
+        "src/poller.py::poll_loop",
+        "src/scheduler.py::weekly_leaderboards",
+        "src/scheduler.py::weekly_champion"
+      ],
+      "depends_on": [
+        "America/Chicago timezone"
+      ]
+    }
+  ]
+}
